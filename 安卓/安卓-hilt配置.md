@@ -56,3 +56,72 @@ Compose Material3重复引入两行依赖，无编译错误但增加打包体积
 1. 全局字符串检索：`Ctrl+Shift+F`；全局替换：`Ctrl+Shift+R`
 2. 查找文件：`Ctrl+Shift+N`；查找类：`Ctrl+N`
 3. 当前页查找：`Ctrl+F`；查看代码引用：`Alt+F7`
+
+
+
+
+
+
+# 精简优化终版复盘（凝练、专业、适配Android RTC/Hilt工程复盘存档）
+## 一、项目基线
+Android 原生Compose工程，技术栈：AGP 8.4 + Kotlin 1.9.22 + Hilt依赖注入，诉求为构建打包调试，问题集中在Gradle依赖拉取、注解编译、JDK环境三层。
+
+## 二、核心理论要点
+### 1. Hilt 构件与版本边界
+1. 标准三套依赖构成：运行库`hilt-android`、安卓专属编译器`hilt-android-compiler`、通用注解处理器`hilt-compiler`；
+2. 版本特性分界线：**2.50及以上**才提供`hilt { disableCrossVersionCheck = true }`配置，低版本编写该代码直接语法报错；
+3. `hilt-navigation-compose`用于Compose导航注入，大版本号必须和Hilt主版本保持一致。
+
+### 2. Gradle 国内仓库治理规则
+1. 国内最优仓库排序：阿里云镜像优先 > Google仓库 > MavenCentral，平衡下载速度与构件完整性；
+2. `RepositoriesMode.FAIL_ON_PROJECT_REPOS`开启后，全项目仓库统一由根目录`settings.gradle.kts`管控，子模块不可私自声明仓库；
+3. 关键痛点：阿里云镜像同步滞后，部分迭代小版本（2.49）Google官方仅发布Gradle插件，未推送`hilt-android-compiler`，全网镜像均无法下载该构件。
+
+### 3. Gradle JDK 三层优先级（高频易错）
+优先级递减：Android Studio可视化配置Gradle JDK ＞ `gradle.properties`内`org.gradle.java.home` ＞ 系统全局`JAVA_HOME`环境变量
+1. AGP 8.x 硬性要求JDK17，JDK26等高版本Java存在字节码、Kapt注解编译兼容故障，禁止选用；
+2. Android Studio内置编译沿用IDE指定JDK；终端`gradlew`命令只会读取系统`JAVA_HOME`，两套环境极易割裂报错。
+
+### 4. Kapt注解编译硬性前提
+1. 必备插件：`kotlin-kapt` + Hilt Gradle插件缺一不可；
+2. 兼容方案：低版本可双kapt编译器消除版本校验警告；国内网络环境下，仅保留通用`hilt-compiler`可规避安卓编译器缺失问题，所有Android注入能力不受影响。
+
+## 三、踩坑汇总（根源+现象+规避方案）
+1. **盲目升级Hilt版本，未校验构件完整性**
+现象：2.48/2.49/2.51轮番切换，持续抛出`Could not resolve hilt-android-compiler`依赖找不到异常
+根源：2.49官方构件缺失，新版国内镜像同步差、拉取失败率高
+规避：长期稳定锁定 **2.44**，阿里云同步最全，完美兼容当前AGP、Kotlin版本
+
+2. **IDE与命令行JDK环境分离**
+现象：Android Studio内项目同步正常，PowerShell执行打包命令提示`JAVA_HOME目录无效`
+根源：系统环境变量配置了已删除的JDK26，终端读取全局变量失效；IDE独立使用JDK17互不互通
+规避：终端编译前临时覆盖`$env:JAVA_HOME`；或统一在`gradle.properties`固化JDK17路径
+
+3. **高版本Hilt配置向下混用**
+现象：低版本Hilt写入跨版本校验关闭配置，报未解析引用语法错误
+规避：`disableCrossVersionCheck`仅2.50+可用，低版本直接删除hilt配置块
+
+4. **冗余依赖堆砌**
+现象：Compose Material3重复引入、高版本Hilt双编译器冗余
+隐患：增大编译耗时、APK体积，无业务收益
+规避：按需精简依赖，版本对齐
+
+5. **仓库源排序不合理**
+现象：国外源靠前导致频繁超时、依赖下载中断；纯屏蔽官方源会缺失Android前沿构件
+规避：阿里云前置兜底Google、Maven中央仓
+
+## 四、最终稳定落地标准配置
+1. Hilt固定2.44，移除hilt{}配置块，仅保留通用`hilt-compiler`单注解处理器，彻底解决国内依赖拉取问题；
+2. settings.gradle仓库顺序：阿里云镜像优先，官方源兜底；开启统一仓库管控；
+3. 全工程统一使用Microsoft OpenJDK 17，终端编译临时覆写Java环境变量；
+4. 清理所有重复冗余Compose依赖，规范Kapt插件引入。
+
+## 五、附加：Android Studio高频搜索快捷键（开发效率工具）
+| 用途 | Windows快捷键 |
+| ---- | ------------ |
+| 全局全文搜索字符串 | `Ctrl+Shift+F` |
+| 全局批量替换 | `Ctrl+Shift+R` |
+| 快速查找文件 | `Ctrl+Shift+N` |
+| 检索Java/Kotlin类 | `Ctrl+N` |
+| 当前文件内查找文本 | `Ctrl+F` |
+| 查看方法/变量全部引用处 | `Alt+F7` |
