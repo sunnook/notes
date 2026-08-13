@@ -1,0 +1,52 @@
+[root@dvrdvs neoe] # ./app-O0-
+[inter2plan0] Average cycles: 218
+[inter2plan1] Average cycles: 130
+[inter2plan2] Average cycles: 51
+[inter2plan3] Average cycles: 45
+Test finished. Sink: 684000
+System Timer Frequency: 12000000 Hz
+[inter2plan0] Avg cycles: 217, Avg time: 18.13 us
+[inter2plan1] Avg cycles: 130, Avg time: 10.91 us
+[inter2plan2] Avg cycles: 51, Avg time: 4.26 us
+[inter2plan3] Avg cycles: 44, Avg time: 3.72 us
+Test finished. Sink: 684000
+[root@dvrdvs neoe] #
+[root@dvrdvs neoe] # ./app-O2-fno
+[inter2plan0] Average cycles: 193
+[inter2plan1] Average cycles: 15
+[inter2plan2] Average cycles: 13
+[inter2plan3] Average cycles: 4
+Test finished. Sink: 684000
+System Timer Frequency: 12000000 Hz
+[inter2plan0] Avg cycles: 193, Avg time: 16.12 us
+[inter2plan1] Avg cycles: 15, Avg time: 1.27 us
+[inter2plan2] Avg cycles: 13, Avg time: 1.14 us
+[inter2plan3] Avg cycles: 4, Avg time: 0.34 us
+Test finished. Sink: 684000
+[root@dvrdvs neoe] #
+[root@dvrdvs neoe] # ./app-O3-ftree
+[inter2plan0] Average cycles: 194
+[inter2plan1] Average cycles: 15
+[inter2plan2] Average cycles: 6
+[inter2plan3] Average cycles: 4
+Test finished. Sink: 684000
+System Timer Frequency: 12000000 Hz
+[inter2plan0] Avg cycles: 193, Avg time: 16.11 us
+[inter2plan1] Avg cycles: 15, Avg time: 1.27 us
+[inter2plan2] Avg cycles: 6, Avg time: 0.57 us
+[inter2plan3] Avg cycles: 4, Avg time: 0.34 us
+Test finished. Sink: 684000
+[root@dvrdvs neoe] #
+[root@dvrdvs neoe] # ./app-O3-fno
+[inter2plan0] Average cycles: 193
+[inter2plan1] Average cycles: 15
+[inter2plan2] Average cycles: 13
+[inter2plan3] Average cycles: 4
+Test finished. Sink: 684000
+System Timer Frequency: 12000000 Hz
+[inter2plan0] Avg cycles: 193, Avg time: 16.12 us
+[inter2plan1] Avg cycles: 15, Avg time: 1.27 us
+[inter2plan2] Avg cycles: 13, Avg time: 1.14 us
+[inter2plan3] Avg cycles: 4, Avg time: 0.34 us
+Test finished. Sink: 684000
+[root@dvrdvs neoe] #
