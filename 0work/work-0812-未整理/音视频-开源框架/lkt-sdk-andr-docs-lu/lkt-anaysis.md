@@ -171,48 +171,74 @@
 
 ---
 
-## 第 0 章 阅读指南与前置知识（给 C/C++ 背景读者）
+第 0 章 阅读指南与前置知识（给 C/C++ 背景读者）
 
 本章把阅读本 SDK 所需的 Kotlin/Java/Android 关键概念，用 C/C++ 读者熟悉的视角快速建立起来，并讲清 Kotlin/Java 与 C++（native WebRTC）的交互边界。
 
 ### 0.1 Kotlin 速查
 
-- **`val` / `var`**：`val` 是只读引用（类似 C++ 的 `const` 局部/成员，但对象本身可变），`var` 是可变引用。
-- **`data class`**：自动生成 `equals/hashCode/toString/copy`，类似 C++ 中带运算符重载的 POD 结构体。如 `data class TrackBitrateInfo(val codec: String, val maxBitrate: Long)`。
-- **`sealed class`**：受限继承体系（类似 C++ 的"已知子类集合"），编译器能做穷尽 `when` 检查。本 SDK 大量用于事件与错误类型，如 `sealed class RoomEvent`、`sealed class TrackException`。
-- **`object`**：单例对象。`object LiveKit { ... }` 即进程级单例（类似 C++ 中 Meyers 单例）。
-- **`companion object`**：类级单例，承载类似 Java `static` 的常量与工厂方法。
-- **扩展函数/扩展属性**：在不继承的情况下给已有类加方法，本质是"第一个参数是接收者"的静态函数。如 `livekit-android-sdk/.../RTCEngine.kt:1539` 的 `fun LivekitRtc.ICEServer.toWebrtc()`。
-- **`by` 委托**：把属性或接口的实现委托给另一个对象。本 SDK 最核心的 `flowDelegate` 即属性委托（见第 12 章）。
-- **`suspend` 函数 / 协程（coroutine）**：可挂起的函数。类比 C++20 协程，但 Kotlin 协程有成熟的库支持。`suspend fun connect(...)` 可在内部 `await` 而不阻塞线程；`CoroutineScope` 是协程的"所有权范围"，`SupervisorJob` 是结构化并发的失败隔离单元（子协程异常不会取消兄弟）。
-- **`Flow` / `StateFlow` / `SharedFlow`**：协程版的"可观察流"。`StateFlow` 持有最新值（类似 C++ 中带缓存的可订阅变量），`SharedFlow` 是广播流。`collect` 即订阅。
-- **`@JvmInline value class`**：零分配的包装类型（编译期内联为底层类型），用于强类型 ID，如 `value class Sid(val sid: String)`。
-- **`inline fun` + `contract`**：内联函数并声明调用契约，让编译器做更聪明的类型推断。如 `Track.kt:198` 的 `withRTCTrack`。
+- **`val` / `var`**：
+	-`val` 是只读引用（类似 C++ 的 `const` 局部/成员，但对象本身可变），`var` 是可变引用。
+- **`data class`**：
+	-自动生成 `equals/hashCode/toString/copy`，类似 C++ 中带运算符重载的 POD 结构体。如 `data class TrackBitrateInfo(val codec: String, val maxBitrate: Long)`。
+- **`sealed class`**：
+	-受限继承体系（类似 C++ 的"已知子类集合"），编译器能做穷尽 `when` 检查。本 SDK 大量用于事件与错误类型，如 `sealed class RoomEvent`、`sealed class TrackException`。
+- **`object`**：
+	-单例对象。`object LiveKit { ... }` 即进程级单例（类似 C++ 中 Meyers 单例）。
+- **`companion object`**：
+	-类级单例，承载类似 Java `static` 的常量与工厂方法。
+- **扩展函数/扩展属性**：
+	-在不继承的情况下给已有类加方法，本质是"第一个参数是接收者"的静态函数。如 `livekit-android-sdk/.../RTCEngine.kt:1539` 的 `fun LivekitRtc.ICEServer.toWebrtc()`。
+- **`by` 委托**：
+	-把属性或接口的实现委托给另一个对象。本 SDK 最核心的 `flowDelegate` 即属性委托（见第 12 章）。
+- **`suspend` 函数 / 协程（coroutine）**：
+	-可挂起的函数。类比 C++20 协程，但 Kotlin 协程有成熟的库支持。`suspend fun connect(...)` 可在内部 `await` 而不阻塞线程；`CoroutineScope` 是协程的"所有权范围"，`SupervisorJob` 是结构化并发的失败隔离单元（子协程异常不会取消兄弟）。
+- **`Flow` / `StateFlow` / `SharedFlow`**：
+	-协程版的"可观察流"。`StateFlow` 持有最新值（类似 C++ 中带缓存的可订阅变量），`SharedFlow` 是广播流。`collect` 即订阅。
+- **`@JvmInline value class`**：
+	-零分配的包装类型（编译期内联为底层类型），用于强类型 ID，如 `value class Sid(val sid: String)`。
+- **`inline fun` + `contract`**：
+	-内联函数并声明调用契约，让编译器做更聪明的类型推断。如 `Track.kt:198` 的 `withRTCTrack`。
 
 ### 0.2 Java 速查
 
-- **`interface`**：Java 接口，Kotlin 也用。本 SDK 中大量 `interface Factory { fun create(...): X }` 用于依赖注入工厂。
-- **注解（annotation）**：`@Inject`、`@Singleton`、`@AssistedInject` 等是 Dagger 注解；`@JvmStatic` 让 Kotlin 的 `object` 成员对 Java 调用方表现为静态方法。
-- **泛型**：与 C++ 模板不同，Java/Kotlin 泛型是运行期擦除的（erasure）。
-- **`@Volatile`**：Kotlin 的 `@Volatile` 对应 Java 的 `volatile`，保证可见性但不保证复合原子性（与 C++ 的 `volatile` 语义不同，更接近 `std::atomic` 的"可见性"部分）。
+- **`interface`**：
+	- Java 接口，Kotlin 也用。本 SDK 中大量 `interface Factory { fun create(...): X }` 用于依赖注入工厂。
+- **注解（annotation）**：`
+	- @Inject`、`@Singleton`、`@AssistedInject` 等是 Dagger 注解；`@JvmStatic` 让 Kotlin 的 `object` 成员对 Java 调用方表现为静态方法。
+- **泛型**：
+	- 与 C++ 模板不同，Java/Kotlin 泛型是运行期擦除的（erasure）。
+- **`@Volatile`**：
+	- Kotlin 的 `@Volatile` 对应 Java 的 `volatile`，保证可见性但不保证复合原子性（与 C++ 的 `volatile` 语义不同，更接近 `std::atomic` 的"可见性"部分）。
 
 ### 0.3 Android 速查
 
-- **`Context`**：Android 的"环境句柄"，能访问资源、启动服务、获取系统服务。`Application` 是整个进程的 Context，`Activity` 是单个界面。本 SDK 要求传 `appContext`，并警告若不是 `Application` 可能内存泄漏（`LiveKit.kt:87`）。
-- **权限**：录音/相机需运行时权限 `RECORD_AUDIO` / `CAMERA`，SDK 在创建 track 时检查（`LocalVideoTrack.kt:478`、`LocalAudioTrack.kt:229`）。
-- **`Handler` / `HandlerThread`**：Android 的线程消息队列。`HandlerThread` 是自带 Looper 的工作线程，`Handler` 向其投递任务。`AudioSwitchHandler` 用它保证 AudioSwitch 单线程访问（`AudioSwitchHandler.kt:218`）。
-- **`SurfaceView` / `TextureView`**：两种渲染视图。SDK 提供 `SurfaceViewRenderer` / `TextureViewRenderer`，底层是 WebRTC 的 `SurfaceViewRenderer`，通过 EGL 上下文把解码后的视频帧绘制到 Surface。
-- **`EglBase`**：WebRTC 对 OpenGL ES 上下文的封装，视频渲染与某些 GPU 编解码需要它。
-- **`MediaProjection`**：屏幕录制权限与数据源，`LocalScreencastVideoTrack` 依赖它。
-- **`AudioManager`**：音频焦点（audio focus）、音频模式（MODE_IN_COMMUNICATION）、路由（扬声器/听筒/蓝牙）。
+- **`Context`**：
+	- Android 的"环境句柄"，能访问资源、启动服务、获取系统服务。`Application` 是整个进程的 Context，`Activity` 是单个界面。本 SDK 要求传 `appContext`，并警告若不是 `Application` 可能内存泄漏（`LiveKit.kt:87`）。
+- **权限**：
+	- 录音/相机需运行时权限 `RECORD_AUDIO` / `CAMERA`，SDK 在创建 track 时检查（`LocalVideoTrack.kt:478`、`LocalAudioTrack.kt:229`）。
+- **`Handler` / `HandlerThread`**：
+	- Android 的线程消息队列。`HandlerThread` 是自带 Looper 的工作线程，`Handler` 向其投递任务。`AudioSwitchHandler` 用它保证 AudioSwitch 单线程访问（`AudioSwitchHandler.kt:218`）。
+- **`SurfaceView` / `TextureView`**：
+	- 两种渲染视图。SDK 提供 `SurfaceViewRenderer` / `TextureViewRenderer`，底层是 WebRTC 的 `SurfaceViewRenderer`，通过 EGL 上下文把解码后的视频帧绘制到 Surface。
+- **`EglBase`**：
+	- WebRTC 对 OpenGL ES 上下文的封装，视频渲染与某些 GPU 编解码需要它。
+- **`MediaProjection`**：
+	- 屏幕录制权限与数据源，`LocalScreencastVideoTrack` 依赖它。
+- **`AudioManager`**：
+- 音频焦点（audio focus）、音频模式（MODE_IN_COMMUNICATION）、路由（扬声器/听筒/蓝牙）。
 
 ### 0.4 Kotlin ↔ Java 互操作
 
 本 SDK 是纯 Kotlin 写的，但对外暴露 Java 友好 API：
-- `@JvmStatic`：`LiveKit.kt:40` 的 `var loggingLevel` 加了 `@JvmStatic`，Java 代码可 `LiveKit.setLoggingLevel(...)`。
-- `@JvmInline value class`：对 Java 表现为普通类型。
-- `null` 平台类型：Kotlin 的可空 `String?` 对 Java 是平台类型，SDK 用 `@Nullable`/`@NonNull` 注解约束。
-- `kotlin.reflect`：运行期反射，`FlowDelegate.kt:48` 用 `KProperty0.delegate` 反射拿到属性背后的 `StateFlow`，这是 `@FlowObservable` 机制的关键（见第 12 章）。
+- `@JvmStatic`：
+	- `LiveKit.kt:40` 的 `var loggingLevel` 加了 `@JvmStatic`，Java 代码可 `LiveKit.setLoggingLevel(...)`。
+- `@JvmInline value class`：
+	- 对 Java 表现为普通类型。
+- `null` 平台类型：
+	- Kotlin 的可空 `String?` 对 Java 是平台类型，SDK 用 `@Nullable`/`@NonNull` 注解约束。
+- `kotlin.reflect`：
+	- 运行期反射，`FlowDelegate.kt:48` 用 `KProperty0.delegate` 反射拿到属性背后的 `StateFlow`，这是 `@FlowObservable` 机制的关键（见第 12 章）。
 
 ### 0.5 Kotlin/Java ↔ C++ 交互（WebRTC native 边界）
 

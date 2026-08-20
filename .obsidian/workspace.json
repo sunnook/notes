@@ -4,24 +4,39 @@
     "type": "split",
     "children": [
       {
-        "id": "58f7e02ff9a9ae32",
+        "id": "8ed34b219f08cb53",
         "type": "tabs",
         "children": [
           {
-            "id": "89f485d4fe2f2206",
+            "id": "4e964c60b39eadd5",
             "type": "leaf",
             "state": {
               "type": "markdown",
               "state": {
-                "file": "其他/双系统安装.md",
+                "file": "0work/work-0812-未整理/音视频-开源框架/lkt-sdk-andr-docs-lu/lkt-anaysis - 副本.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "双系统安装"
+              "title": "lkt-anaysis - 副本"
+            }
+          },
+          {
+            "id": "f968b24a93d03134",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "0work/work-0812-未整理/音视频-开源框架/lkt-sdk-andr-docs-lu/lkt-anaysis.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "lkt-anaysis"
             }
           }
-        ]
+        ],
+        "currentTab": 1
       }
     ],
     "direction": "vertical"
@@ -94,7 +109,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "其他/双系统安装.md",
+                "file": "0work/work-0812-未整理/音视频-开源框架/lkt-sdk-andr-docs-lu/lkt-anaysis.md",
                 "collapseAll": true,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +119,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "双系统安装 的反向链接列表"
+              "title": "lkt-anaysis 的反向链接列表"
             }
           },
           {
@@ -182,10 +197,22 @@
       "bases:新建数据库": false
     }
   },
-  "active": "89f485d4fe2f2206",
+  "active": "f968b24a93d03134",
   "lastOpenFiles": [
+    "0work/work-0820-livekit/docs-lu-0814-lkt/lkt-overview.md",
+    "0work/work-0820-livekit/docs-lu-0814-lkt/lkt-deep-dive.md",
+    "0work/work-0820-livekit/docs-lu-0814-lkt/lkt-architecture-deep-read.md",
+    "0work/work-0820-livekit/docs-lu-0814-lkt",
+    "0work/work-0820-livekit",
+    "0work/work-0820-livekit.7z",
+    "0work/test.7z",
+    "0work/test.wav",
+    "0work/work-0812-未整理/音视频-开源框架/lkt-sdk-andr-docs-lu/lkt-anaysis - 副本.md",
+    "0work/work-0812-未整理/音视频-开源框架/lkt-sdk-andr-docs-lu/kotlin语法-lkt为例.md",
+    "0work/work-0812-未整理/音视频-开源框架/lkt-sdk-andr-docs-lu/lkt-anaysis.md",
+    "0work/work-0812-未整理/音视频-开源框架/lkt-sdk-andr-docs-lu/lkt-anaysis - 副本 - 副本.md",
+    "其他/双系统安装.md",
     "webrtc/测试.md.md",
-    "test.md.canvas",
-    "其他/双系统安装.md"
+    "test.md.canvas"
   ]
 }

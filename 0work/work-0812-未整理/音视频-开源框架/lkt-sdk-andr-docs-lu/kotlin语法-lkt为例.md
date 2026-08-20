@@ -75,66 +75,108 @@
 - `kotlin.reflect`：
 	- 运行期反射，`FlowDelegate.kt:48` 用 `KProperty0.delegate` 反射拿到属性背后的 `StateFlow`，这是 `@FlowObservable` 机制的关键（见第 12 章）。
 
-### 0.5 Kotlin/Java ↔ C++ 交互（WebRTC native 边界）
 
-这是 C++ 读者最该关注的部分：
 
-- **WebRTC 是 C++ 原生库**：Google 的 libwebrtc 是 C++ 实现，Android 上以 `.so` 形式打包。`org.webrtc` 包是 Java 绑定层，通过 **JNI** 调用 native 代码。
-- **`livekit.org.webrtc` 是 LiveKit 的二次封装**：本仓库 `livekit-android-sdk/src/main/java/livekit/org/webrtc/` 下有 `Camera1Helper`、`Camera2Helper` 等，是 LiveKit 对 Google `org.webrtc` 的补充与定制（注意包名是 `livekit.org.webrtc`，用 `livekit.` 前缀避免与官方包冲突）。
-- **RTC 线程模型**：libwebrtc 内部有专用线程（信令线程、工作线程、网络线程）。**所有 WebRTC API 调用必须在同一线程**，否则行为未定义。本 SDK 用 `RTCThreadToken` + `executeBlockingOnRTCThread` / `launchBlockingOnRTCThread` 强制线程亲和性（见第 6 章）。这类似 C++ 中"锁住一个专用线程做所有操作"的模式，但用协程封装成"在协程里阻塞投递到 RTC 线程执行"。
-- **对象生命周期**：native 对象需显式 `dispose()` 释放，不能依赖 GC（GC 时机不可控且可能不及时释放 native 资源）。`PeerConnectionFactoryManager.kt:33` 的 `dispose()` 甚至校验当前线程名必须是 RTC 线程，否则抛异常——这是 native 资源线程亲和性的强约束。
-- **数据流向**：摄像头/麦克风 → Java 层 capturer → native 编码器 → native RTP 栈 → 网络；网络 → native RTP 栈 → native 解码器 → Java 层 sink → 渲染。Java 层主要做"编排"与"回调"，重活在 native。
+## 1. Kotlin 编码规范（官方 Kotlin / Android Kotlin 规范）
 
-> **给 C++ 读者的心智模型**：把 `org.webrtc.*` 想象成一组"带引用计数的 C++ 对象的 Java 句柄"，调用其方法等于跨 JNI 调 C++；`dispose()` 等于 `Release()`；`RTCThreadToken` 等于"必须持锁才能操作"的线程锁。
+**大写开头 = 类型（类/接口）；小写开头 = 变量/函数** 是社区约定，不是语法规则。写错不会编译报错，但可读性直接爆炸。
 
----
+ **快速记忆表格**
 
-## 第 1 章 总览：工程定位、模块组成、入口
+| 东西                | 命名约定             | 是否语法强制 |
+| ----------------- | ---------------- | ------ |
+| class / interface | PascalCase 首字母大写 | ❌ 仅约定  |
+| 普通变量、函数、成员属性      | camelCase 首字母小写  | ❌ 仅约定  |
+| const val 编译期常量   | ALL_UPPER_SNAKE  | ❌ 仅约定  |
+|                   |                  |        |
 
-### 1.1 工程定位
+> 这是**编码约定（convention），不是语法强制**。编译器不会报错，只是行业规范。
 
-LiveKit 是一个开源的实时音视频平台（SFU 架构），提供房间、参与者、轨道（track）的抽象。本仓库 `client-sdk-android-main` 是其 **Android 客户端 SDK**，让 Android 应用接入 LiveKit 房间，实现：
+1. **类、接口、枚举、对象类型：大驼峰 `PascalCase`，首字母大写**
+```kotlin
+class RoomOptions    // ✅ 规范
+class roomOptions    // 语法允许，但所有人都会认为写得烂
+```
+包括：`interface LiveKitComponent`，编译产出 `DaggerLiveKitComponent` 也遵守这个。
 
-- 发布本地麦克风/摄像头/屏幕共享轨道
-- 订阅远端参与者的音视频轨道并渲染
-- 收发数据消息、数据流、RPC 调用
-- 端到端加密（E2EE）
-- 连接管理、重连、网络自适应
+2. **变量、函数、属性：小驼峰 `camelCase`，首字母小写**
+```kotlin
+val ctx
+val appContext
+fun create()
+```
 
-SDK 对外隐藏 WebRTC 的复杂性，对内通过 LiveKit 服务器做信令协调。
+### 哪些例外（语法允许，约定特殊）
+- **常量（`const val`）**：全大写下划线分隔
+```kotlin
+const val MAX_RETRY_COUNT = 5
+```
+- 单例 `object`（Kotlin的对象声明，等价单例类），同样首字母大写。
 
-### 1.2 顶层 Gradle 模块组成
+> ⚠️ 语法层面：Kotlin**完全不强制大小写**。
+> 下面代码编译可以跑，但是违反团队规范：
+```kotlin
+class badClass {}    // 语法合法，规范错误
+val BadVariable = 1  // 语法合法，规范错误
+```
 
-仓库根目录的 `settings.gradle` 定义了多个模块，核心是 `livekit-android-sdk`，其余是辅助：
+对比C++：
+C++也只是约定，编译器不强制；很多C++团队：类大驼峰，变量小驼峰/下划线，常量全大写。
 
-| 模块 | 作用 |
-|---|---|
-| `livekit-android-sdk` | **核心 SDK**，本文分析对象，包根 `io.livekit.android` |
-| `livekit-android-camerax` | CameraX 集成（可选的相机捕获实现） |
-| `livekit-android-track-processors` | 视频帧处理器（如虚拟背景，基于 RTCVideoFrameProcessor） |
-| `livekit-android-test` | 测试基础设施（mock、MockE2ETest 基类），是 SDK 的 friend 模块可访问 internal |
-| `livekit-detekt-rules` / `livekit-lint` | 自定义静态检查规则 |
-| `sample-app*` / `examples` | 示例应用 |
-| `video-encode-decode-test` | 编解码测试 |
-| `protocol` | protobuf 协议定义（生成 `livekit.LivekitModels` / `livekit.LivekitRtc`） |
 
-### 1.3 入口与一句话架构
+
+## 2. 以livekit 为例
 
 入口是 `LiveKit` 单例对象（`LiveKit.kt:34`）：
 
 	静态工厂方法，**创建 LiveKit `Room` 对象**。
 	`Room` 对应 RTC 房间实例，等价于 C++ 里 `std::unique_ptr<Room>` 工厂函数，不直接 new，走 Dagger 依赖注入框架构建。
 
+`LiveKit.create()` 做三件事：构建 Dagger 依赖图 → 用工厂创建 `Room` → 应用 `RoomOptions`。
+
 ```kotlin
 object LiveKit {
+    
     fun create(
     appContext: Context, 
     options: RoomOptions = RoomOptions(), 
     overrides: LiveKitOverrides = LiveKitOverrides()
     ): Room
 }
+  
+/**  
+ * Create a Room object. */
+fun create(  
+    appContext: Context,  
+    options: RoomOptions = RoomOptions(),  
+    overrides: LiveKitOverrides = LiveKitOverrides(),  
+): Room {  
+    // 1.拿到编译器生成的Factory对象
+    val ctx = appContext.applicationContext  
+  
+    if (ctx !is Application) {  
+        LKLog.w 
+        { "Application context was not found, this may cause memory leaks." }  
+    }  
+  
+    // 2.调用factory.create()，传入外部必须的外部依赖 ctx、overrides 
+    //   内部new出DaggerLiveKitComponent容器实例，内部把所有底层依赖全部装配完成
+    val component = DaggerLiveKitComponent  
+        .factory()  
+        .create(ctx, overrides)  
 
+    // 3.从容器取出已经装配完成的 RoomFactory  component.roomFactory()
+    // 4.工厂创建Room对象，Room内部所需要的WebRTC、音频模块全部已经DI注入好了
+    val room = component.roomFactory().create(ctx)  
+    
+    // 5.业务参数 RoomOptions 是运行时参数，Dagger不处理，手动set进去
+    room.setRoomOptions(options)  
+  
+    return room  
+}
+```
 
+```kotlin
 
 fun create( 
     appContext: Context,  // Android 上下文，类比 C++ 传入环境 / 运行时句柄。
@@ -164,7 +206,658 @@ fun create(
 
 ```
 
-`LiveKit.create()` 做三件事：构建 Dagger 依赖图 → 用工厂创建 `Room` → 应用 `RoomOptions`。
+
+# 问题拆解
+源码再贴一遍，方便对照：
+```kotlin
+fun create(
+    appContext: Context,
+    options: RoomOptions = RoomOptions(),
+    overrides: LiveKitOverrides = LiveKitOverrides(),
+): Room {
+    val ctx = appContext.applicationContext
+
+    if (ctx !is Application) {
+        LKLog.w { "Application context was not found, this may cause memory leaks." }
+    }
+
+    val component = DaggerLiveKitComponent
+        .factory()
+        .create(ctx, overrides)
+
+    val room = component.roomFactory().create(ctx)
+    room.setRoomOptions(options)
+
+    return room
+}
+```
+
+## 1. 区分：变量 / 类 / Kotlin语法符号（约定符号）
+> C++背景：`class`=类；变量=实例/引用；符号是语言语法，不是变量也不是类。
+
+### 🟦 类（类型，相当于C++ class/struct）
+| 类名 | 说明 |
+|---|---|
+| `Context` | Android系统类，上下文句柄 |
+| `RoomOptions` | LiveKit配置类 |
+| `LiveKitOverrides` | DI覆盖配置类 |
+| `Room` | 返回值类型，房间业务类 |
+| `Application` | Android App全局应用类 |
+| `DaggerLiveKitComponent` | **Dagger编译自动生成的类**（源码看不到，编译产物） |
+| `LKLog` | LiveKit日志工具类 |
+
+> `DaggerLiveKitComponent.factory()`：`factory()`是这个类的**静态方法**，返回一个工厂对象。
+
+### 🟩 变量（内存里的实例/引用，对应C++引用/指针）
+| 变量名          | 哪里定义                 | 类型                             | 来源                                                                                                                                                        |
+| ------------ | -------------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `appContext` | 函数入参                 | `Context`                      | **调用者传入**，外部调用create的时候传进来                                                                                                                                |
+| `options`    | 函数入参                 | `RoomOptions`                  | 调用者传入，有默认值                                                                                                                                                |
+| `overrides`  | 函数入参                 | `LiveKitOverrides`             | 调用者传入，有默认值                                                                                                                                                |
+| `ctx`        | 函数内部 `val ctx = ...` | `Context`                      | 👉**回答你的问题：ctx哪里来！**<br>`ctx = appContext.applicationContext`，拿入参`appContext`的属性，不是凭空创建。不管你传Activity还是别的Context，访问它的`.applicationContext`属性拿到**全局应用上下文**。 |
+| `component`  | 函数内部 val             | DaggerLiveKitComponent（DI容器实例） | Dagger工厂create()返回出来的IoC容器实例                                                                                                                              |
+| `room`       | 函数内部 val             | Room                           | `component.roomFactory().create(ctx)` 工厂产出的Room实例                                                                                                         |
+
+> Kotlin `val` ≈ C++ `const`引用：引用本身不可重新赋值；但对象内部成员可以修改。
+> `var` 才是可以重新指向别的对象。这里全部是`val`。
+
+### 🟪 Kotlin约定语法符号（语言本身，不是类、不是变量）
+|符号|含义，对标C++|
+|---|---|
+|`fun` | 定义函数；C++ `static` 函数 |
+|`:` | 冒号：`变量: 类型`，**类型标注**。例 `appContext: Context`；C++反过来 `Context appContext` |
+|`= RoomOptions()` | 默认参数；C++：`RoomOptions options = RoomOptions{}` |
+|`val` | 只读引用（不能重新赋值）；≈ `auto const&` |
+|`!is` | 类型判断运算符：**不是XX类型**<br>`ctx !is Application` → `if(!(ctx instanceof Application))`；C++没有内置运算符，等价`dynamic_cast`判空 |
+|`{ ... }` lambda：`LKLog.w { "xxx" }` <br>w接收一个lambda，延迟执行字符串拼接；<br>C++等价lambda `[](){ return "str"; }` |
+|`.` | 成员调用，和C++ `.` 一样；对象.方法 / 对象.属性 |
+|`()` | 函数调用 |
+
+> 重点区分：
+> `RoomOptions()`：带括号，**构造函数调用，创建对象实例**
+> `RoomOptions`：不带括号，指**类本身（类型）**
+
+---
+
+## 2. IOC是什么（IoC Inversion of Control 控制反转）
+### 通俗对比C++
+普通C++写法（正流程）：
+**业务代码自己负责new所有依赖**
+```cpp
+// 业务代码主动创建各个依赖
+auto audioModule = std::make_shared<AudioModule>();
+auto netModule = std::make_shared<NetModule>();
+auto room = std::make_shared<Room>(audioModule, netModule);
+```
+> 业务代码掌控对象创建、依赖装配。
+
+**IoC / 控制反转：把对象创建、依赖装配交给容器。**
+业务代码不再手动new依赖，只告诉容器：我需要一个Room。
+容器内部自动把AudioModule、NetModule构造好、注入给Room。
+
+- **IoC容器**：就是一个大对象仓库，管理所有对象生命周期、依赖关系。
+- **DI（依赖注入 Dependency Injection）：是实现IoC的手段**。Dagger2就是Android编译期DI框架。
+
+> LiveKit这里 `DaggerLiveKitComponent` 就是这个IoC容器实例。
+> 你只需要向容器拿 `roomFactory`，你不用关心Room内部需要Audio、WebRTC底层哪些类。容器全部装配完毕。
+
+#### IoC两个关键点
+1. **控制反转**：对象创建控制权从业务代码 → 交给容器
+2. **依赖注入**：容器把依赖自动塞给目标类（构造注入/set注入）
+
+> C++生态没有标准IoC，很多项目手写简易IoC容器；Java/Kotlin生态Dagger/Hilt广泛使用。
+
+---
+
+## 3. ctx 完整溯源：`val ctx = appContext.applicationContext`
+1. `appContext`：外部调用`create()`的时候，调用方传进来的参数，可以是Activity、Service、Application。
+2. 任何Android Context（Activity/Service）都有成员属性 `.applicationContext`。
+3. 这个属性返回**全局单例Application上下文**，生命周期=整个APP进程，不会随页面销毁。
+
+伪代码还原：
+```kotlin
+// 假设外部调用：
+// Room.create(activity, ...)
+// appContext 就是 activity
+val ctx = activity.applicationContext // 取出全局App上下文，不再持有Activity
+```
+
+> 为什么要这么做？
+如果Room长生命周期，直接持有Activity引用，Activity finish销毁后GC无法回收 → **内存泄漏**。
+所以代码内部强制向上拿applicationContext。
+
+> 日志警告：`ctx !is Application`，正常情况`.applicationContext`返回对象一定是Application类型；极少数魔改ROM会异常，打印警告。
+
+### 小结快速记忆
+1. `ctx`**不是凭空生成**，来源于传入参数`appContext`的`.applicationContext`属性。
+2. IoC：对象创建交给容器，业务代码不手动组装一堆底层依赖；Dagger生成的Component就是IoC容器实例。
+3. `val/fun/:/!is` 属于Kotlin语言语法符号，既不是变量，也不是类。
+
+如果你需要，我可以下一步：把Dagger这几行，用纯C++手写模拟一份简易IoC伪代码，一眼看懂Dagger到底帮我们干了什么。
+
+
+
+
+
+
+
+
+# LiveKit Android Kotlin create() 函数解析
+> 你有C++背景，我会对标C++概念来讲，避开纯Kotlin玄学，重点讲**职责、Dagger依赖注入、对象生命周期、内存坑点**。
+
+```kotlin
+fun create(
+    appContext: Context,
+    options: RoomOptions = RoomOptions(),
+    overrides: LiveKitOverrides = LiveKitOverrides(),
+): Room {
+    val ctx = appContext.applicationContext
+
+    if (ctx !is Application) {
+        LKLog.w { "Application context was not found, this may cause memory leaks." }
+    }
+
+    val component = DaggerLiveKitComponent
+        .factory()
+        .create(ctx, overrides)
+
+    val room = component.roomFactory().create(ctx)
+    room.setRoomOptions(options)
+
+    return room
+}
+```
+
+## 整体功能
+静态工厂方法，**创建 LiveKit `Room` 对象**。
+`Room` 对应 RTC 房间实例，等价于C++里 `std::unique_ptr<Room>` 工厂函数，不直接new，走Dagger依赖注入框架构建。
+
+### 参数说明
+1. `appContext: Context`
+Android上下文，类比C++传入环境/运行时句柄。
+- Activity Context：生命周期随页面销毁；
+- Application Context：全局单例生命周期，整个App存活。
+
+2. `options: RoomOptions = RoomOptions()`
+带默认参数，Kotlin `= xxx` 就是默认实参，C++等价：
+```cpp
+RoomOptions options = RoomOptions{} // 默认参数
+```
+房间配置：视频编码、音频、降噪、比特率等。
+
+3. `overrides: LiveKitOverrides = LiveKitOverrides()`
+依赖注入覆盖配置，**用来替换内部默认实现类**。
+> C++类比：依赖注入的策略注入，替换接口的默认实现，比如把默认日志器换成你自己的日志实现。
+
+---
+
+## 逐行拆解
+```kotlin
+val ctx = appContext.applicationContext
+```
+**强制拿Application全局上下文**。
+哪怕你传入Activity（页面）的Context，代码主动取出它附属的`ApplicationContext`。
+> ⚠️ Android经典内存泄漏坑：如果Room长生命周期，持有Activity Context，Activity销毁无法GC，内存泄漏。
+> C++类比：不要保存局部栈对象的指针，要拿全局实例句柄。
+
+```kotlin
+if (ctx !is Application) {
+    LKLog.w { "Application context was not found, this may cause memory leaks." }
+}
+```
+`!is` = 不是这个类型，运行时类型判断。
+理论上 `applicationContext` 一定返回`Application`，极少数定制ROM会异常，打警告日志。
+
+```kotlin
+val component = DaggerLiveKitComponent
+    .factory()
+    .create(ctx, overrides)
+```
+**Dagger2 依赖注入核心，这是最陌生的部分**。
+
+- `LiveKitComponent`：Dagger的**Component接口**，相当于一个大的依赖容器（C++没有原生对应，类似手写IoC容器）。
+- `DaggerLiveKitComponent`：Dagger编译期自动生成的实现类，你源码看不到，编译产物。
+- `.factory()`：Component工厂，用来传入外部依赖（这里是Android Context、overrides）。
+- `.create(ctx, overrides)`：实例化整个IoC容器，把全局上下文、自定义覆盖配置灌进去。
+
+> C++通俗类比：
+> Dagger在编译阶段帮你写好了一整套对象构造代码，不用手写大量new，自动处理类之间依赖关系。
+> `LiveKitComponent`容器内部管理一堆底层对象：音频模块、视频模块、网络模块、日志、`RoomFactory`工厂等。
+> `overrides`允许你替换容器内部某些默认对象，比如替换底层socket实现、替换编码器。
+
+```kotlin
+val room = component.roomFactory().create(ctx)
+```
+1. `component.roomFactory()`：从IoC容器取出 `RoomFactory` 对象。工厂类，专门生产Room实例。
+2. `.create(ctx)`：调用工厂方法真正构建Room对象。
+
+> C++视角：IoC容器里面拿到 `RoomFactory* factory`；`factory->create(ctx)`。
+> Room对象内部大量依赖（WebRTC底层包装、音频管理等）全部由Dagger注入，不用我们手动传一堆构造参数。
+
+```kotlin
+room.setRoomOptions(options)
+```
+工厂构建完Room实例之后，**后置设置房间业务参数**。
+> 为什么不直接传给构造函数？Dagger工厂是编译生成，不方便传入业务运行时参数；所以先构造对象，再set配置。
+
+```kotlin
+return room
+```
+返回Room实例给上层，后续调用`room.connect()`连接RTC房间。
+
+---
+
+# 对标C++ 关键概念对照表
+| Kotlin / Android | C++等价理解 |
+|---|---|
+| `fun create(...) : Room` | static工厂函数 `static Room create(...)` |
+| `Context` | 运行时环境句柄 |
+| `applicationContext` | 全局App单例句柄，避免持有局部对象 |
+| `Dagger Component` | IoC/依赖注入容器（编译生成，C++需要手写） |
+| `overrides` | 策略模式，替换接口实现 |
+| `RoomFactory` | 工厂模式，生产Room实例 |
+| 默认参数 `= RoomOptions()` | C++默认实参 |
+
+## 重点坑点（做RTC开发需要注意）
+1. **必须传入Application上下文**
+不要传Activity，否则如果Room没有销毁，页面Activity内存泄漏。
+> 即使你传Activity，代码内部会自动拿applicationContext，但警告说明极端情况失效。
+
+2. `DaggerLiveKitComponent` 是编译生成，不要手动new，不能自己new Room，**必须走这个create工厂**。
+Room内部持有大量WebRTC native(C++)层对象，直接构造会缺失依赖，直接crash。
+
+3. `LiveKitOverrides`：高级用法，比如替换底层网络、自定义音频模块；普通业务开发不传，用默认即可。
+
+4. 生命周期：返回的Room对象，用完要调用`room.release()`，底层会释放WebRTC C++资源，否则native内存泄漏。
+
+## 补充：这个代码的架构思想（和C++ RTC项目对比）
+很多C++ RTC项目：手写一大堆工厂，构造函数传巨多依赖；
+LiveKit Android 使用Dagger做编译期DI：
+- 底层依赖（WebRTC包装、音频、视频）交给Dagger自动装配
+- 业务层参数（RoomOptions），对象构建完成后set进去分离
+- `overrides`提供扩展点，允许替换内部组件，方便二次开发。
+
+如果你需要，我可以顺带讲一下Room对象内部大致的C++<->Kotlin JNI调用链路。
+
+
+
+
+
+
+
+
+## 用C++手写极简模拟 Dagger 的逻辑
+
+注意：
+>这是**模拟伪代码**，不是真实Dagger源码；目的就是把
+`DaggerLiveKitComponent.factory().create(ctx, overrides)`
+翻译成你熟悉的C++，看懂DI容器到底在干什么。
+
+原始Kotlin代码片段：
+```kotlin
+val component = DaggerLiveKitComponent
+    .factory()
+    .create(ctx, overrides)
+
+val room = component.roomFactory().create(ctx)
+```
+
+源码里手写定义一个接口（这是你能看到的源码）
+```kotlin
+// 源码中手写接口，这是输入给Dagger编译器
+interface LiveKitComponent {
+    fun roomFactory(): RoomFactory
+
+    interface Factory {
+        fun create(ctx: Context, overrides: LiveKitOverrides): LiveKitComponent
+    }
+}
+
+
+// Dagger编译自动生成产物，你看不到源码
+class DaggerLiveKitComponent : LiveKitComponent {
+
+    // 编译器生成的内部类，实现接口 LiveKitComponent.Factory
+    private class FactoryImpl : LiveKitComponent.Factory {
+        override fun create(ctx: Context, overrides: LiveKitOverrides): LiveKitComponent {
+            // 真正构造 DaggerLiveKitComponent 对象，装配全部依赖
+            return DaggerLiveKitComponent(ctx, overrides)
+        }
+    }
+
+    // 静态方法 factory()，返回上面FactoryImpl实例（接口类型是 LiveKitComponent.Factory）
+    companion object {
+        fun factory(): LiveKitComponent.Factory {
+            return FactoryImpl()
+        }
+    }
+
+    // 实现接口 fun roomFactory(): RoomFactory
+    override fun roomFactory(): RoomFactory {
+        return m_cached_roomFactory
+    }
+}
+```
+
+> Dagger编译器读到这个接口，自动生成实现类 `DaggerLiveKitComponent`。
+
+
+### C++模拟实现
+```cpp
+#include <memory>
+
+// 前置类型（对应Android/Kotlin侧的类）
+struct Context {};
+struct LiveKitOverrides {};
+struct Room {};
+
+// 工厂抽象
+class RoomFactory {
+public:
+    virtual ~RoomFactory() = default;
+    virtual std::unique_ptr<Room> create(Context ctx) = 0;
+};
+
+// Component抽象接口，等价 Kotlin LiveKitComponent
+class LiveKitComponent {
+public:
+    virtual ~LiveKitComponent() = default;
+    virtual std::shared_ptr<RoomFactory> roomFactory() = 0;
+
+    // 内部Factory接口，用来接收外部传入参数
+    class Factory {
+    public:
+        virtual ~Factory() = default;
+        virtual std::shared_ptr<LiveKitComponent> create(Context ctx, LiveKitOverrides overrides) = 0;
+    };
+
+    // 静态获取Factory实例
+    static std::shared_ptr<Factory> factory();
+};
+
+// ========== Dagger编译器自动生成的实现类 ==========
+// 等价 Kotlin DaggerLiveKitComponent，编译产物，你源码看不到
+class DaggerLiveKitComponent : public LiveKitComponent, public std::enable_shared_from_this<DaggerLiveKitComponent> {
+private:
+    Context m_ctx;
+    LiveKitOverrides m_overrides;
+    std::shared_ptr<RoomFactory> m_roomFactory;
+
+    // 构造函数私有！外部不能直接 new，只能走Factory
+    DaggerLiveKitComponent(Context ctx, LiveKitOverrides overrides)
+        : m_ctx(ctx), m_overrides(overrides)
+    {
+        // ✨DI容器核心：在这里装配所有内部依赖
+        // 根据 overrides 判断：使用用户自定义实现，还是默认实现
+        m_roomFactory = buildRoomFactory(m_ctx, m_overrides);
+    }
+
+public:
+    std::shared_ptr<RoomFactory> roomFactory() override {
+        return m_roomFactory;
+    }
+
+    // 编译器生成的Factory实现
+    class FactoryImpl : public LiveKitComponent::Factory {
+    public:
+        std::shared_ptr<LiveKitComponent> create(Context ctx, LiveKitOverrides overrides) override {
+            // 真正构造Component容器实例
+            return std::shared_ptr<DaggerLiveKitComponent>(new DaggerLiveKitComponent(ctx, overrides));
+        }
+    };
+
+    static std::shared_ptr<LiveKitComponent::Factory> factory() {
+        static auto inst = std::make_shared<FactoryImpl>();
+        return inst;
+    }
+
+private:
+    // 内部装配逻辑：根据overrides选择具体实现类
+    std::shared_ptr<RoomFactory> buildRoomFactory(Context ctx, LiveKitOverrides overrides);
+};
+
+// 调用方业务代码，等价原来Kotlin那两行
+void demo() {
+    Context ctx;
+    LiveKitOverrides overrides;
+
+    // 对应：DaggerLiveKitComponent.factory().create(ctx, overrides)
+    auto component = DaggerLiveKitComponent::factory()->create(ctx, overrides);
+
+    // 对应：component.roomFactory().create(ctx)
+    auto room = component->roomFactory()->create(ctx);
+}
+```
+
+
+
+# 核心回答
+## 1. Dagger 确实会自动生成实现类
+- 你手写：`interface LiveKitComponent`（父接口），嵌套子接口 `LiveKitComponent.Factory`
+- Dagger编译器扫描这个接口 + Dagger注解，**编译阶段生成 Java/Kotlin 源代码**，输出 `DaggerLiveKitComponent`
+- ✅ **两个接口全部自动实现**
+  1. 实现外层 `LiveKitComponent`：重写 `fun roomFactory(): RoomFactory`
+  2. 在生成的类内部，生成一个内部类 `FactoryImpl`，实现嵌套子接口 `LiveKitComponent.Factory`，重写 `fun create(...)`
+
+> 注意：生成的是源码，不是运行时动态生成（不是反射！）。编译完你可以在build目录下找到 `DaggerLiveKitComponent.kt` / `.java` 文件，可以打开看完整代码。
+
+C++类比：
+想象你写一份`.idl`接口描述文件；代码生成器读取idl，帮你生成派生类，实现全部纯虚函数。Dagger就是做这件事的编译器插件。
+
+---
+
+## 2. 为什么非要自动实现？为什么不能手写？
+先看如果**手写实现 LiveKitComponent**会发生什么，你就能体会痛点。
+
+`LiveKitComponent` 这个Component，它的职责：
+> 管理一大堆依赖对象：AudioModule、VideoModule、WebRTC底层包装、网络栈、日志、RoomFactory等等。
+> 这些类之间互相依赖：A需要B，B需要C，C又需要外部传入的`Context`、`overrides`。
+
+### 手写版本伪代码（C++视角）
+```cpp
+// 手写实现 LiveKitComponent
+class MyLiveKitComponent : public LiveKitComponent
+{
+private:
+    Context m_ctx;
+    LiveKitOverrides m_overrides;
+
+    // 一大堆被管理的依赖，几十行成员变量
+    std::shared_ptr<AudioModule> m_audioModule;
+    std::shared_ptr<VideoModule> m_videoModule;
+    std::shared_ptr<NetTransport> m_net;
+    std::shared_ptr<RoomFactory> m_roomFactory;
+
+public:
+    MyLiveKitComponent(Context ctx, LiveKitOverrides overrides)
+        : m_ctx(ctx), m_overrides(overrides)
+    {
+        // 手动装配依赖，噩梦从这里开始
+        // AudioModule 需要 Context
+        m_audioModule = std::make_shared<AudioModule>(m_ctx);
+
+        // VideoModule 需要 Context + AudioModule
+        m_videoModule = std::make_shared<VideoModule>(m_ctx, m_audioModule);
+
+        // NetTransport 需要 Context
+        m_net = std::make_shared<NetTransport>(m_ctx);
+
+        // RoomFactory 需要 audio/video/net 一大堆依赖
+        m_roomFactory = std::make_shared<DefaultRoomFactory>(
+            m_ctx,
+            m_audioModule,
+            m_videoModule,
+            m_net,
+            m_overrides
+        );
+
+        // 🔴 坑1：依赖顺序不能错！先构造被依赖对象，再构造使用者。
+        // 🔴 坑2：新增一个底层模块，这里构造代码全部要改。
+        // 🔴 坑3：如果某个类构造参数变了，所有手写装配代码全部要改。
+        // 🔴 坑4：还要处理 overrides：如果用户传入自定义AudioModule，就替换默认。if else爆炸。
+    }
+
+    std::shared_ptr<RoomFactory> roomFactory() override {
+        return m_roomFactory;
+    }
+};
+```
+
+### 手写的现实痛点（RTC项目这种依赖繁多的场景尤其痛）
+1. **依赖顺序必须人工维护**
+B依赖A，必须先实例化A，再实例化B。类一多，很容易顺序写错，直接crash。
+
+2. **构造参数改动，连锁爆炸**
+底层AudioModule增加一个构造参数，你要跑到Component的构造函数里改装配代码；所有用到AudioModule的地方都要改。
+
+3. **覆写(overrides)逻辑繁琐**
+LiveKitOverrides允许用户替换内部某个组件。手写就要写大量`if‑else`判断：如果用户给了自定义实现就用用户的，否则new默认实现。组件一多，代码臃肿。
+
+4. **重复样板代码巨多**
+项目里不止一个Component，每一个IoC容器都要写一大坨装配逻辑，全是机械重复劳动。
+
+5. **容易手写错：漏传依赖、传错对象**
+比如构造RoomFactory的时候，不小心传错一个模块，运行时才崩，调试成本高。
+
+---
+
+## Dagger自动生成解决什么？
+开发者只做两件事：
+1. 在各个类的构造函数上加注解，告诉Dagger：**这个类需要哪些依赖**。
+2. 写Component接口，声明：“我对外要暴露出什么对象（`roomFactory()`）”。
+
+剩下全部交给编译器：
+- Dagger扫描所有类的构造函数，**自动分析依赖图**，自动排好实例化顺序。
+- 如果用户给了`overrides`，自动分支选择自定义实现/默认实现。
+- 自动生成全部new/装配代码。
+- 编译期就检查依赖完整性：**缺依赖直接编译报错，而不是运行时崩溃**。
+
+> 重点：**编译期检查，不是运行时反射**。这是Dagger对比Spring这类运行时IoC最大优势，适合Android移动端。
+
+### 比喻
+- 手写Component：你手工拼一台电脑，记住顺序：先装CPU，再装主板，再装内存，接错就开不了机。
+- Dagger：你只写零件说明书（注解标记每个零件需要什么配件），编译器帮你按正确顺序组装整台机器。
+
+---
+
+## 回到LiveKit这个例子
+LiveKit内部有大量WebRTC包装、音频、视频、网络模块，依赖链很长。
+如果全部手写Component装配代码，维护成本极高；底层WebRTC版本升级，类构造一变，手写代码到处要改。
+
+> 所以：手写接口（契约），Dagger生成实现。
+> 你只管定义需要什么，不要管怎么new、怎么按顺序组装。
+
+---
+
+## 补充两个容易混淆点
+1. **接口只是契约，Dagger根据契约+注解生成实现**
+接口本身没有任何装配逻辑；注解才告诉Dagger各个类之间依赖关系。
+
+2. 命名约定：手写接口叫`XxxComponent`；生成的实现类固定前缀`Dagger` → `DaggerXxxComponent`。
+
+### 极简小结
+1. ✔父接口`LiveKitComponent`，嵌套子接口`LiveKitComponent.Factory`，Dagger编译阶段全部生成实现代码。
+2. 为什么自动实现：避免手写海量、容易出错的对象装配样板代码；编译期校验依赖，避免运行时bug；底层模块改动时，不需要人工修改容器组装代码。
+3. C++生态没有标准Dagger，所以C++项目要么手写IoC容器，要么干脆直接new；Kotlin/Android大规模项目普遍用Dagger解决复杂依赖。
+
+如果你想，下一步可以看：类上加的`@Component`、`@Factory`这些注解到底起什么作用。
+
+
+
+
+### 关键点，对照回Kotlin
+
+1. **构造函数私有**
+`DaggerLiveKitComponent` 你不能直接 `new` / `DaggerLiveKitComponent()`。
+必须走 `Factory::create()`，外部传入外部依赖：`ctx`、`overrides`。
+> 这就是为什么LiveKit文档明确：**不要手动new Room，必须调用 Room.create()**。
+
+2. `overrides` 的作用
+`buildRoomFactory` 里面：如果用户在`overrides`传入自定义的`RoomFactory`，就用用户的；否则实例化默认的内部实现。
+这就是DI容器的扩展点。
+
+3. component 就是 IoC容器实例
+容器内部一次性把所有底层依赖全部建好（音频模块、WebRTC wrapper、网络、日志等），保存为成员变量。
+后面你只需要从容器拿已经装配好的对象，不用自己传一堆构造参数。
+
+4. 编译期生成，不是运行时反射
+> 这点和很多Java旧IoC不一样：Dagger没有运行时反射；全部是编译阶段生成如上的实现代码，性能高，适合移动端。
+
+---
+
+### 回到原来Kotlin完整流程，用大白话串一遍
+```kotlin
+// 1.拿到编译器生成的Factory对象
+DaggerLiveKitComponent.factory()
+
+// 2.调用factory.create，传入外部必须的外部依赖 ctx、overrides
+// 内部new出DaggerLiveKitComponent容器实例，内部把所有底层依赖全部装配完成
+val component = ... .create(ctx, overrides)
+
+// 3.从容器取出已经装配完成的 RoomFactory
+val factory = component.roomFactory()
+
+// 4.工厂创建Room对象，Room内部所需要的WebRTC、音频模块全部已经DI注入好了
+val room = factory.create(ctx)
+
+// 5.业务参数 RoomOptions 是运行时参数，Dagger不处理，手动set进去
+room.setRoomOptions(options)
+```
+
+> 为什么 `RoomOptions` 不走Dagger注入？
+- `ctx`、`overrides`：属于**容器初始化外部依赖**，容器构建的时候就要。
+- `RoomOptions`：业务运行时参数，每次创建Room可以不一样，不适合放到编译期DI容器，所以构建完对象之后set。
+
+### 容易踩坑的点
+1. 不要自己 `DaggerLiveKitComponent(...)`；构造私有，编译报错。
+2. 不要自己 `Room()`，Room的构造函数也是内部私有；直接new会缺失一堆WebRTC底层依赖，直接crash/native内存异常。
+3. component 实例不要反复创建，但是LiveKit封装在`Room.create()`内部，对你屏蔽了component，你感知不到。
+
+如果你愿意，下一步我们可以看：`component.roomFactory().create(ctx)` 内部，Room类的构造大概长什么样，看哪些依赖是Dagger注入进来的。
+
+
+
+
+
+
+
+
+## 类归属核对
+> 你的判断大部分正确，有一处细节：`DaggerLiveKitComponent` **不是Dagger库自带类**，是Dagger编译生成的**本项目专属类**。
+
+| 类                        | 归属                                                                                                                      | 你的判断校验                  |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `RoomOptions`            | ✅ LiveKit 项目自定义 Kotlin 数据类，业务配置                                                                                         | 项目自己定义                  |
+| `LiveKitOverrides`       | ✅ LiveKit 项目自定义，DI覆写配置                                                                                                  | 项目自己定义                  |
+| `LKLog`                  | ✅ LiveKit内部日志工具类，项目自定义                                                                                                  | 项目自己定义                  |
+| `Context`                | ✅ Android SDK framework 系统类（`android.content.Context`）                                                                  | Android系统类 ✔            |
+| `Application`            | ✅ Android SDK `android.app.Application` 系统类                                                                             | Android系统类 ✔            |
+| `DaggerLiveKitComponent` | ⚠️ **不是Dagger库自带类**<br>源码里你看不到这个文件；Dagger编译器扫描源码中接口 `LiveKitComponent`，编译时自动生成 `DaggerLiveKitComponent`，属于**当前项目编译产物**。 | ❗不是Dagger库自带，是为本项目生成的代码 |
+
+> Dagger库提供的是注解、编译器；不会直接给你 `DaggerXxxComponent`，每个项目的Component都是编译生成。
+
+---
+
+## 类型大写开头、变量小写开头
+
+---
+
+## 补充一个容易混淆点
+```kotlin
+RoomOptions     // 引用【类本身】（类型）
+RoomOptions()   // 调用构造函数，生成【实例对象】
+```
+`RoomOptions()` 返回出来的是实例，可以赋值给变量：
+```kotlin
+val options: RoomOptions = RoomOptions()
+// 变量名options小写；类型RoomOptions大写，严格分开。
+```
+
+---
+
+
+如果你需要，我们可以继续：把 `DaggerLiveKitComponent.factory().create(...)` 翻译成一份手写C++伪代码，把DI容器做个极简模拟，彻底看懂这行到底干了什么。
+
 
 **一句话架构**：
 > `Room` 是面向用户的门面（管理连接状态、参与者、轨道、事件），`
