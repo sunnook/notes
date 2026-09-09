@@ -85,12 +85,12 @@ LiveKit(object) ──create()──▶ DaggerLiveKitComponent (DI 容器，编�
 
 LiveKit 同时跑在**四类线程**上，读代码时必须时刻意识到"这段代码在哪个线程跑"：
 
-| 线程/调度器 | 来源 | 跑什么 | C++ 类比 |
-|---|---|---|---|
-| **IO Dispatcher** | `Dispatchers.IO` (`CoroutinesModule.kt:36`) | 连接、WebSocket 收发、协商、发布等大部分协程 | 线程池，IO 密集 |
-| **Default Dispatcher** | `Dispatchers.Default` (`CoroutinesModule.kt:32`) | Room 的 `coroutineScope` 默认调度器 | CPU 密集线程池 |
-| **Main Dispatcher** | `Dispatchers.Main` (`CoroutinesModule.kt:40`) | UI 线程（渲染、回调 App） | 主线程 |
-| **RTC Thread** | WebRTC 原生线程 | 所有 `PeerConnection.*` 调用**必须**在此线程 | 专用 native 线程 |
+| 线程/调度器                 | 来源                                               | 跑什么                                | C++ 类比       |
+| ---------------------- | ------------------------------------------------ | ---------------------------------- | ------------ |
+| **IO Dispatcher**      | `Dispatchers.IO` (`CoroutinesModule.kt:36`)      | 连接、WebSocket 收发、协商、发布等大部分协程        | 线程池，IO 密集    |
+| **Default Dispatcher** | `Dispatchers.Default` (`CoroutinesModule.kt:32`) | Room 的 `coroutineScope` 默认调度器      | CPU 密集线程池    |
+| **Main Dispatcher**    | `Dispatchers.Main` (`CoroutinesModule.kt:40`)    | UI 线程（渲染、回调 App）                   | 主线程          |
+| **RTC（PC） Thread**     | WebRTC 原生线程                                      | 所有 `PeerConnection.*` 调用**必须**在此线程 | 专用 native 线程 |
 
 **RTC 线程是最大的坑**：WebRTC 的 `PeerConnection` API 不是线程安全的，所有对它的调用必须切到 RTC 线程。SDK 用 `executeOnRTCThread` / `executeBlockingOnRTCThread` / `launchBlockingOnRTCThread` 三个工具函数封装（`webrtc/peerconnection/` 包）。
 
@@ -177,15 +177,20 @@ fun create(
 
 **逐行解读**：
 
-- **第 1 行 `applicationContext`**：Android 的 `Context` 有两种——Activity 级（随 Activity 销毁）和 Application 级（App 全局）。SDK 要持有 Context 长期使用，若用 Activity 的会泄漏（Activity 被销毁但 SDK 还引用它，GC 回收不了）。`applicationContext` 取全局的，安全。
+- **第 1 行 `applicationContext`**：
+	Android 的 `Context` 有两种——Activity 级（随 Activity 销毁）和 Application 级（App 全局）。SDK 要持有 Context 长期使用，若用 Activity 的会泄漏（Activity 被销毁但 SDK 还引用它，GC 回收不了）。`applicationContext` 取全局的，安全。
 
-- **第 2 行 `ctx !is Application`**：`is` 是 Kotlin 类型检查（C++ 类比 `dynamic_cast`）。如果连 `applicationContext` 都不是 Application（罕见，比如某些测试环境），给个警告。
+- **第 2 行 `ctx !is Application`**：
+	`is` 是 Kotlin 类型检查（C++ 类比 `dynamic_cast`）。如果连 `applicationContext` 都不是 Application（罕见，比如某些测试环境），给个警告。
 
-- **第 3 行**：`DaggerLiveKitComponent` 是 Dagger **编译期生成**的类（你搜不到源码，build 后才出现）。`.factory().create(ctx, overrides)` 触发整张依赖图的运行时构建——所有 `@Provides` 方法在此刻被调用，单例对象诞生。`ctx` 通过 `@BindsInstance` 绑定进图（`LiveKitComponent.kt:55`），`overrides` 包成 `OverridesModule`（`LiveKitComponent.kt:61` 的扩展函数）。
+- **第 3 行**：
+	`DaggerLiveKitComponent` 是 Dagger **编译期生成**的类（你搜不到源码，build 后才出现）。`.factory().create(ctx, overrides)` 触发整张依赖图的运行时构建——所有 `@Provides` 方法在此刻被调用，单例对象诞生。`ctx` 通过 `@BindsInstance` 绑定进图（`LiveKitComponent.kt:55`），`overrides` 包成 `OverridesModule`（`LiveKitComponent.kt:61` 的扩展函数）。
 
-- **第 4 行**：`roomFactory()` 返回 `Room.Factory`（`@AssistedFactory`，`Room.kt:1108`），`.create(ctx)` 用运行时的 `ctx` + DI 注入的依赖造出 Room。注意 `ctx` 这里**第二次**出现——第一次是绑进 DI 图（供其他对象用），第二次是作为 Room 的 `@Assisted` 参数。
+- **第 4 行**：
+	`roomFactory()` 返回 `Room.Factory`（`@AssistedFactory`，`Room.kt:1108`），`.create(ctx)` 用运行时的 `ctx` + DI 注入的依赖造出 Room。注意 `ctx` 这里**第二次**出现——第一次是绑进 DI 图（供其他对象用），第二次是作为 Room 的 `@Assisted` 参数。
 
-- **第 5 行**：把 `RoomOptions` 应用到已造好的 Room（详见 2.6）。
+- **第 5 行**：
+	把 `RoomOptions` 应用到已造好的 Room（详见 2.6）。
 
 > **此刻没有任何网络连接**。Room 是个装配好的对象，`state == DISCONNECTED`，没有 WebSocket、没有 PeerConnection。网络活动要等用户调 `room.connect()`。
 
@@ -338,12 +343,12 @@ class OverridesModule(private val overrides: LiveKitOverrides) {
 
 #### 2.2.3 其余 5 个 Module（都很短，快速过）
 
-- **`CoroutinesModule`**（`CoroutinesModule.kt:29`）：4 个 `@Provides`，分别返回 `Dispatchers.Default/IO/Main/Unconfined`，用 `@Named(DISPATCHER_*)` 限定。所有需要调度器的对象都注入这些（不直接用 `Dispatchers.X`，便于测试替换）。
-- **`WebModule`**（`WebModule.kt:39`）：`okHttpClient`（默认 `globalOkHttpClient`，`by lazy` 单例，`:86`）、`websocketFactory`（就是 OkHttpClient，OkHttp 本身实现 `WebSocket.Factory`）、`connectionWarmer`（连接预热，DNS+TLS 预建）、`networkInfo`（网络类型查询）、`connectivityManager`、`networkCallbackManagerFactory`（网络变化监听工厂）。
-- **`AudioHandlerModule`**（`AudioHandlerModule.kt:39`）：`audioOutputType`（默认 `CallAudioType`，`:46`）、`audioOutputAttributes`、`audioHandler`（默认 `AudioSwitchHandler`，可 Override，`:58`）、`communicationWorkaround`（Android 11+ 通信模式 6 秒无音频会自动重置的修复，`:75`，用静音轨保活）。
-- **`MemoryModule`**（`MemoryModule.kt:28`）：就一个 `closeableManager()` 返回 `CloseableManager` 单例。所有重对象注册到这里，`Room.release()` → `closeableManager.close()` 统一释放。
-- **`JsonFormatModule`**（`JsonFormatModule.kt:28`）：`kotlinx.serialization` 的 `Json { ignoreUnknownKeys = true }`（解析 ICE candidate JSON 用，容忍服务器多字段）。
-- **`InternalBindsModule`**（`InternalBindsModule.kt:30`）：`@Binds` 把接口绑到实现（`IncomingDataStreamManager`→`Impl`、`OutgoingDataStreamManager`→`Impl`）。`@Binds` 比 `@Provides` 简洁，只做接口→实现的映射。
+- **CoroutinesModule**（`CoroutinesModule.kt:29`）：4 个 `@Provides`，分别返回 `Dispatchers.Default/IO/Main/Unconfined`，用 `@Named(DISPATCHER_*)` 限定。所有需要调度器的对象都注入这些（不直接用 `Dispatchers.X`，便于测试替换）。
+- **WebModule**（`WebModule.kt:39`）：`okHttpClient`（默认 `globalOkHttpClient`，`by lazy` 单例，`:86`）、`websocketFactory`（就是 OkHttpClient，OkHttp 本身实现 `WebSocket.Factory`）、`connectionWarmer`（连接预热，DNS+TLS 预建）、`networkInfo`（网络类型查询）、`connectivityManager`、`networkCallbackManagerFactory`（网络变化监听工厂）。
+- **AudioHandlerModule**（`AudioHandlerModule.kt:39`）：`audioOutputType`（默认 `CallAudioType`，`:46`）、`audioOutputAttributes`、`audioHandler`（默认 `AudioSwitchHandler`，可 Override，`:58`）、`communicationWorkaround`（Android 11+ 通信模式 6 秒无音频会自动重置的修复，`:75`，用静音轨保活）。
+- **MemoryModule**（`MemoryModule.kt:28`）：就一个 `closeableManager()` 返回 `CloseableManager` 单例。所有重对象注册到这里，`Room.release()` → `closeableManager.close()` 统一释放。
+- **JsonFormatModule**（`JsonFormatModule.kt:28`）：`kotlinx.serialization` 的 `Json { ignoreUnknownKeys = true }`（解析 ICE candidate JSON 用，容忍服务器多字段）。
+- **InternalBindsModule**（`InternalBindsModule.kt:30`）：`@Binds` 把接口绑到实现（`IncomingDataStreamManager`→`Impl`、`OutgoingDataStreamManager`→`Impl`）。`@Binds` 比 `@Provides` 简洁，只做接口→实现的映射。
 
 ### 2.3 阶段②：Room 构造与回调接线
 
@@ -636,9 +641,11 @@ stateLock.withLock {
 }
 ```
 
-> **`getCurrentRoomOptions()`（`Room.kt:398`）**：把 Room 当前各属性（adaptiveStream/dynacast/e2eeOptions/6 个默认值）打包成一个 `RoomOptions` 快照。之后 `engine.join` 用这个快照，保证连接期间配置一致。
+> **`getCurrentRoomOptions()`（`Room.kt:398`）**：
+> 	把 Room 当前各属性（adaptiveStream/dynacast/e2eeOptions/6 个默认值）打包成一个 `RoomOptions` 快照。之后 `engine.join` 用这个快照，保证连接期间配置一致。
 
-> **`setupLocalParticipantEventHandling()`（`Room.kt:700`）**：启动一个协程收集 `localParticipant.events`，把参与者级事件（`TrackPublished`/`LocalTrackPublicationFailed`/`TrackUnpublished`/`ParticipantPermissionsChanged`/`MetadataChanged`）转成 `RoomEvent` 发出。这是"参与者层 → 房间层"的事件桥接。
+> **`setupLocalParticipantEventHandling()`（`Room.kt:700`）**：
+> 	启动一个协程收集 `localParticipant.events`，把参与者级事件（`TrackPublished`/`LocalTrackPublicationFailed`/`TrackUnpublished`/`ParticipantPermissionsChanged`/`MetadataChanged`）转成 `RoomEvent` 发出。这是"参与者层 → 房间层"的事件桥接。
 
 **锁外（`Room.kt:502-582`）—— 真正连接（IO 协程）**：
 ```kotlin
@@ -689,7 +696,9 @@ connectJob.join()   // 挂起等待连接完成
 error?.let { handleDisconnect(DisconnectReason.JOIN_FAILURE); throw it }  // 失败处理
 ```
 
-> **读码要点**：`Room.connect` 本身不直接碰 WebSocket，它把活全交给 `engine.join()`。Room 层只管**状态机 + 协程调度 + 区域选路 + 自动发布**。区域选路循环是 Cloud 多机房容错的关键——某个区域连不上自动换下一个。
+> **读码要点**：
+> `Room.connect` 本身不直接碰 WebSocket，它把活全交给 `engine.join()`。
+> Room 层只管**状态机 + 协程调度 + 区域选路 + 自动发布**。区域选路循环是 Cloud 多机房容错的关键——某个区域连不上自动换下一个。
 
 ### 3.1.1 区域选路（RegionUrlProvider）
 
@@ -722,9 +731,11 @@ suspend fun joinImpl(url, token, options, roomOptions): JoinResponse = coroutine
 
 这四步是连接的核心：**信令握手 → 配置 PC → 发起协商 → 开放响应处理**。
 
-> **`isSubscriberPrimary` 与 `fastPublish`**：服务器在 JoinResponse 里告知协商模式。`subscriberPrimary=true` 表示服务器先发 subscriber offer（客户端先应答下行），publisher 延后协商；`fastPublish=true` 则即使 subscriber primary 也立即协商 publisher（快速发布场景）。这两个标志决定第 3 步是否执行。
+> **`isSubscriberPrimary` 与 `fastPublish`**：
+> 服务器在 JoinResponse 里告知协商模式。`subscriberPrimary=true` 表示服务器先发 subscriber offer（客户端先应答下行），publisher 延后协商；`fastPublish=true` 则即使 subscriber primary 也立即协商 publisher（快速发布场景）。这两个标志决定第 3 步是否执行。
 
-> **`join()`（`RTCEngine.kt:235`）与 `joinImpl()` 的区别**：`join()` 是公开入口，先重建 `coroutineScope` + 保存 session 信息（url/token/options/roomOptions），再调 `joinImpl()`。重连时直接调 `joinImpl()` 复用保存的信息。
+> **`join()`（`RTCEngine.kt:235`）与 `joinImpl()` 的区别**：
+> `join()` 是公开入口，先重建 `coroutineScope` + 保存 session 信息（url/token/options/roomOptions），再调 `joinImpl()`。重连时直接调 `joinImpl()` 复用保存的信息。
 
 ### 3.3 信令握手：`SignalClient.connect()`（`SignalClient.kt:167`）
 
@@ -750,7 +761,9 @@ private suspend fun connect(url, token, options, roomOptions): ConnectResult {
 }
 ```
 
-**握手是"挂起 + 回调 resume"模式**：`connect()` 用 `suspendCancellableCoroutine` 挂起当前协程，把续体存进 `joinContinuation`。WebSocket 连上后服务器发 `JoinResponse`，`onMessage` 回调里 `joinContinuation?.resume(...)` 唤醒协程，`connect()` 返回。这是 Kotlin 把"异步回调"转成"同步挂起"的标准手法（C++ 类比：promise + future，回调里 set value，await 处阻塞）。
+**握手是"挂起 + 回调 resume"模式**：
+`connect()` 用 `suspendCancellableCoroutine` 挂起当前协程，把续体存进 `joinContinuation`。WebSocket 连上后服务器发 `JoinResponse`，`onMessage` 回调里 `joinContinuation?.resume(...)` 唤醒协程，`connect()` 返回。
+这是 Kotlin 把"异步回调"转成"同步挂起"的标准手法（C++ 类比：promise + future，回调里 set value，await 处阻塞）。
 
 **`join()`（`SignalClient.kt:131`）** 是 `connect()` 的封装：`connect()` 返回 `ConnectResult`（密封类：`Join`/`Reconnect`/`OtherResponse`），`join()` 只接受 `Join` 分支，否则抛异常。
 
@@ -802,46 +815,49 @@ private fun sendRequestImpl(request) {
 
 protobuf 定义在 `protocol/` 目录，生成的类是 `LivekitRtc.SignalRequest` / `SignalResponse`。读 `handleSignalResponseImpl`（`SignalClient.kt:743`）能看到所有信令类型的分发：
 
-**客户端→服务器（SignalRequest）**，看 `sendXxx` 方法：
-| 方法 | 信令 | 用途 |
-|---|---|---|
-| `sendOffer` (:422) | offer | publisher 协商，发 SDP offer |
-| `sendAnswer` (:431) | answer | subscriber 协商，回 SDP answer |
-| `sendCandidate` (:440) | trickle | 发 ICE candidate（带 target: PUBLISHER/SUBSCRIBER） |
-| `sendAddTrack` (:475) | addTrack | 通知服务器"我要发布一个 track"（带 cid/类型/加密类型） |
-| `sendMuteTrack` (:459) | mute | 静音/取消静音某 track |
-| `sendUpdateSubscription` (:534) | subscription | 订阅/取消订阅（带 participantTracks） |
-| `sendUpdateTrackSettings` (:501) | trackSetting | 调订阅画质/启停/尺寸/fps |
-| `sendUpdateSubscriptionPermissions` (:551) | subscriptionPermission | 设置谁能订阅自己的 track |
-| `sendUpdateLocalMetadata` (:566) | updateMetadata | 改自己的 metadata/名字/属性 |
-| `sendSyncState` (:579) | syncState | 重连后同步本地状态给服务器 |
-| `sendLeave` (:595) | leave | 主动离开（带 reason/action） |
-| `sendPing` (:609) | ping/pingReq | 心跳（pingReq 带 rtt） |
-| `sendUpdateLocalAudioTrack` (:631) | updateAudioTrack | 更新本地音频 track 特性 |
-| `sendSimulateScenario` (:587) | simulate | 模拟故障（测试用） |
 
-**服务器→客户端（SignalResponse）**，看 `handleSignalResponseImpl` 的 `when` 分支（`SignalClient.kt:749`）：
-| 分支 | 回调 | 上层处理 |
-|---|---|---|
-| `ANSWER` (:750) | `onServerAnswer` | publisher.setRemoteDescription |
-| `OFFER` (:756) | `onServerOffer` | subscriber 协商应答 |
-| `TRICKLE` (:762) | `onTrickle` | addIceCandidate（带 target） |
-| `UPDATE` (:773) | `onParticipantUpdate` | 参与者进/出房间 |
-| `TRACK_PUBLISHED` (:781) | `onLocalTrackPublished` | 发布 track 的服务器确认（分配 trackSid） |
-| `TRACK_SUBSCRIBED` (:777) | `onLocalTrackSubscribed` | 自己的 track 被他人订阅 |
-| `SPEAKERS_CHANGED` (:785) | `onSpeakersChanged` | 谁在说话 |
-| `ROOM_UPDATE` (:801) | `onRoomUpdate` | 房间元数据变化 |
-| `CONNECTION_QUALITY` (:805) | `onConnectionQuality` | 连接质量（每参与者） |
-| `SUBSCRIBED_QUALITY_UPDATE` (:813) | `onSubscribedQualityUpdate` | 服务器告诉该发哪档画质（simulcast） |
-| `LEAVE` (:793) | `onLeave` | 服务器要求离开/重连（带 action: RESUME/RECONNECT） |
-| `MUTE` (:797) | `onRemoteMuteChanged` | 服务器要求静音某 track |
-| `STREAM_STATE_UPDATE` (:809) | `onStreamStateUpdate` | 流状态（PAUSED/ACTIVE） |
-| `SUBSCRIPTION_PERMISSION_UPDATE` (:821) | `onSubscriptionPermissionUpdate` | 订阅权限变化 |
-| `REFRESH_TOKEN` (:825) | `onRefreshToken` | 服务器刷新 token |
-| `TRACK_UNPUBLISHED` (:829) | `onLocalTrackUnpublished` | 服务器确认取消发布 |
-| `PONG`/`PONG_RESP` (:833) | resetPingTimeout | 心跳回应（PONG_RESP 带 rtt 计算） |
-| `RECONNECT` (:842) | （握手阶段处理） | 重连握手响应 |
-| `SUBSCRIPTION_RESPONSE` (:847) | `onSubscriptionError` | 订阅错误 |
+**客户端→服务器（SignalRequest）**，看 sendXxx 方法：
+
+| 方法                                       | 信令                     | 用途                                              |     |
+| ---------------------------------------- | ---------------------- | ----------------------------------------------- | --- |
+| sendOffer (:422)                         | offer                  | publisher 协商，发 SDP offer                        |     |
+| sendAnswer (:431)                        | answer                 | subscriber 协商，回 SDP answer                      |     |
+| sendCandidate (:440)                     | trickle                | 发 ICE candidate（带 target: PUBLISHER/SUBSCRIBER） |     |
+| sendAddTrack (:475)                      | addTrack               | 通知服务器"我要发布一个 track"（带 cid/类型/加密类型）              |     |
+| sendMuteTrack (:459)                     | mute                   | 静音/取消静音某 track                                  |     |
+| sendUpdateSubscription (:534)            | subscription           | 订阅/取消订阅（带 participantTracks）                    |     |
+| sendUpdateTrackSettings (:501)           | trackSetting           | 调订阅画质/启停/尺寸/fps                                 |     |
+| sendUpdateSubscriptionPermissions (:551) | subscriptionPermission | 设置谁能订阅自己的 track                                 |     |
+| sendUpdateLocalMetadata (:566)           | updateMetadata         | 改自己的 metadata/名字/属性                             |     |
+| sendSyncState (:579)                     | syncState              | 重连后同步本地状态给服务器                                   |     |
+| sendLeave (:595)                         | leave                  | 主动离开（带 reason/action）                           |     |
+| sendPing (:609)                          | ping/pingReq           | 心跳（pingReq 带 rtt）                               |     |
+| sendUpdateLocalAudioTrack (:631)         | updateAudioTrack       | 更新本地音频 track 特性                                 |     |
+| sendSimulateScenario (:587)              | simulate               | 模拟故障（测试用）                                       |     |
+
+**服务器→客户端（SignalResponse）**，看 handleSignalResponseImpl 的 when 分支（SignalClient.kt:749）：
+
+| 分支                                    | 回调                             | 上层处理                                   |     |
+| ------------------------------------- | ------------------------------ | -------------------------------------- | --- |
+| ANSWER (:750)                         | onServerAnswer                 | publisher.setRemoteDescription         |     |
+| OFFER (:756)                          | onServerOffer                  | subscriber 协商应答                        |     |
+| TRICKLE (:762)                        | onTrickle                      | addIceCandidate（带 target）              |     |
+| UPDATE (:773)                         | onParticipantUpdate            | 参与者进/出房间                               |     |
+| TRACK_PUBLISHED (:781)                | onLocalTrackPublished          | 发布 track 的服务器确认（分配 trackSid）           |     |
+| TRACK_SUBSCRIBED (:777)               | onLocalTrackSubscribed         | 自己的 track 被他人订阅                        |     |
+| SPEAKERS_CHANGED (:785)               | onSpeakersChanged              | 谁在说话                                   |     |
+| ROOM_UPDATE (:801)                    | onRoomUpdate                   | 房间元数据变化                                |     |
+| CONNECTION_QUALITY (:805)             | onConnectionQuality            | 连接质量（每参与者）                             |     |
+| SUBSCRIBED_QUALITY_UPDATE (:813)      | onSubscribedQualityUpdate      | 服务器告诉该发哪档画质（simulcast）                 |     |
+| LEAVE (:793)                          | onLeave                        | 服务器要求离开/重连（带 action: RESUME/RECONNECT） |     |
+| MUTE (:797)                           | onRemoteMuteChanged            | 服务器要求静音某 track                         |     |
+| STREAM_STATE_UPDATE (:809)            | onStreamStateUpdate            | 流状态（PAUSED/ACTIVE）                     |     |
+| SUBSCRIPTION_PERMISSION_UPDATE (:821) | onSubscriptionPermissionUpdate | 订阅权限变化                                 |     |
+| REFRESH_TOKEN (:825)                  | onRefreshToken                 | 服务器刷新 token                            |     |
+| TRACK_UNPUBLISHED (:829)              | onLocalTrackUnpublished        | 服务器确认取消发布                              |     |
+| PONG/PONG_RESP (:833)                 | resetPingTimeout               | 心跳回应（PONG_RESP 带 rtt 计算）               |     |
+| RECONNECT (:842)                      | （握手阶段处理）                       | 重连握手响应                                 |     |
+| SUBSCRIPTION_RESPONSE (:847)          | onSubscriptionError            | 订阅错误                                   |     |
 
 > 注释 `// TODO` 的分支（`:851` 之后：REQUEST_RESPONSE/ROOM_MOVED/MEDIA_SECTIONS_REQUIREMENT 等）是协议已定义但 SDK 尚未实现的信令。
 
@@ -992,9 +1008,11 @@ private suspend fun configure(joinResponse, connectOptions) {
 }
 ```
 
-> **`pctFactory.create(rtcConfig, pcObserver, listener)`**（`PeerConnectionTransport.kt:389` `@AssistedFactory`）：`pcObserver` 是 `PeerConnection.Observer`（收 ICE/状态/onAddTrack 等原生事件），`listener` 是 `PeerConnectionTransport.Listener`（收 `onOffer` 回调——publisher 需要它把生成的 offer 送出去，subscriber 不需要所以传 null）。
+> **`pctFactory.create(rtcConfig, pcObserver, listener)`**（`PeerConnectionTransport.kt:389` `@AssistedFactory`）：
+> 	`pcObserver` 是 `PeerConnection.Observer`（收 ICE/状态/onAddTrack 等原生事件），`listener` 是 `PeerConnectionTransport.Listener`（收 `onOffer` 回调——publisher 需要它把生成的 offer 送出去，subscriber 不需要所以传 null）。
 
-> **`withPeerConnection { ... }`**（`PeerConnectionTransport.kt:115`）：把对 `PeerConnection` 的操作切到 RTC 线程执行并等待结果。所有 PC 操作都通过它，保证线程安全。
+> **`withPeerConnection { ... }`**（`PeerConnectionTransport.kt:115`）：
+> 	把对 `PeerConnection` 的操作切到 RTC 线程执行并等待结果。所有 PC 操作都通过它，保证线程安全。
 
 **双 PC 模型**（这是 LiveKit 区别于普通 WebRTC demo 的核心）：
 ```
@@ -1163,7 +1181,10 @@ override fun onTrickle(candidate, target) {
 ```
 `addIceCandidate`（`PeerConnectionTransport.kt:105`）：若 `remoteDescription != null && !restartingIce` → 直接 `peerConnection.addIceCandidate`；否则暂存到 `pendingCandidates`，等 `setRemoteDescription` 成功后批量加入（`:129`）。这是 Trickle ICE 的标准做法——candidate 可能在 SDP 交换前后任意时刻到达。
 
-> **反向**（本地 ICE candidate → 服务器）：`PublisherTransportObserver.onIceCandidate`（:48）→ `client.sendCandidate(target=PUBLISHER)`；`SubscriberTransportObserver.onIceCandidate`（:52）→ `client.sendCandidate(target=SUBSCRIBER)`。`sendCandidate`（`SignalClient.kt:440`）把 candidate 序列化成 JSON（`IceCandidateJSON`），包进 `TrickleRequest`（带 target）发送。
+> **反向**（本地 ICE candidate → 服务器）：
+> `PublisherTransportObserver.onIceCandidate`（:48）→ `client.sendCandidate(target=PUBLISHER)`；
+> `SubscriberTransportObserver.onIceCandidate`（:52）→ `client.sendCandidate(target=SUBSCRIBER)`。
+> `sendCandidate`（`SignalClient.kt:440`）把 candidate 序列化成 JSON（`IceCandidateJSON`），包进 `TrickleRequest`（带 target）发送。
 
 #### 4.2.5 协商触发时机
 
@@ -1261,7 +1282,8 @@ internal fun createTrack(factory, context, name, capturer, options, rootEglBase,
     return trackFactory.create(capturer, source, options, name, rtcTrack, ...)
 }
 ```
-> 采集层全是 WebRTC 原生 API：`createAudioSource`/`createAudioTrack`、`createVideoSource`/`createVideoTrack`、`SurfaceTextureHelper`（采集线程）、`VideoCapturer`（Camera2Helper 或屏幕采集器）。`videoProcessor` 是插件点（虚拟背景等 ML 处理，见 `track-processors` 模块）。
+> **采集层**全是 **WebRTC 原生 API**：**`createAudioSource`/`createAudioTrack`、`createVideoSource`/`createVideoTrack`、`SurfaceTextureHelper`**（采集线程）、`VideoCapturer`（Camera2Helper 或屏幕采集器）。
+> `videoProcessor` 是插件点（虚拟背景等 ML 处理，见 `track-processors` 模块）。
 
 #### 4.3.3 发布核心：`publishTrackImpl`（`LocalParticipant.kt:631`）
 
@@ -1447,13 +1469,34 @@ fun setVideoDimensions(dimensions: Track.Dimensions) {      // :177 按渲染尺
 ### 4.5 媒体数据流全景
 
 ```
-发布(上行):  麦克风/摄像头 → LocalAudioTrack/LocalVideoTrack(采集, WebRTC createAudioTrack/createVideoTrack)
-             → publisher PC.addTransceiver(SEND_ONLY) → RTP 编码(硬件/软件) → SRTP 加密 → 服务器
-订阅(下行):  服务器 → SRTP 解密 → subscriber PC → RTP 解码
-             → onAddTrack 回调 → RemoteAudioTrack/RemoteVideoTrack(包装 MediaStreamTrack)
-             → VideoSink(SurfaceViewRenderer/TextureViewRenderer) → GPU 渲染到屏幕
-数据消息:    App → RTCEngine.sendData(DataPacket) → publisher DataChannel(reliable/lossy) → 服务器 → 对端
-            对端 → subscriber DataChannel → RTCEngine.onMessage → 解析 DataPacket → 回调(LifecycleListener)
+发布(上行):  
+		麦克风/摄像头 
+		→ LocalAudioTrack/LocalVideoTrack(采集, WebRTC createAudioTrack/createVideoTrack)
+		→ publisher PC.addTransceiver(SEND_ONLY) 
+		→ RTP 编码(硬件/软件) 
+		→ SRTP 加密 
+		→ 服务器
+订阅(下行):  
+		服务器 
+		→ SRTP 解密 
+		→ subscriber PC 
+		→ RTP 解码
+		→ onAddTrack 回调 
+		→ RemoteAudioTrack/RemoteVideoTrack(包装 MediaStreamTrack)
+		→ VideoSink(SurfaceViewRenderer/TextureViewRenderer) 
+		→ GPU 渲染到屏幕
+数据消息:    
+		App 
+		→ RTCEngine.sendData(DataPacket) 
+		→ publisher DataChannel(reliable/lossy) 
+		→ 服务器 
+		→ 对端
+		            
+		对端 
+		→ subscriber DataChannel 
+		→ RTCEngine.onMessage 
+		→ 解析 DataPacket 
+		→ 回调(LifecycleListener)
 ```
 
 ### 4.6 媒体读码清单
