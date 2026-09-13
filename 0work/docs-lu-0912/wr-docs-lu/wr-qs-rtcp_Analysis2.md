@@ -405,6 +405,38 @@ classDiagram
 
 ```mermaid
 flowchart TD
+    A[RTCPSender 构造时<br/>schedule_next_rtcp_send_evaluation 回调<br/>注册到 ModuleRtpRtcpImpl2] --> B[ScheduleRtcpSendEvaluation duration<br/>rtp_rtcp_impl2.cc:802]
+    B --> C{下一次 RTCP 到达?}
+    C -->|是| D[MaybeSendRtcp<br/>rtp_rtcp_impl2.cc:775<br/>worker TaskQueue 上执行]
+    C -->|否| B
+    D --> E{RTCPSender::TimeToSendRTCPReport<br/>rtcp_sender.cc:327<br/>now >= next_time_to_send_rtcp_?}
+    E -->|是| F[rtcp_sender_.SendRTCP<br/>GetFeedbackState, kRtcpReport<br/>rtp_rtcp_impl2.cc:778]
+    E -->|否| B
+    F --> G[RTCPSender::SendRTCP<br/>rtcp_sender.cc:563]
+    G --> H[RTCPSender::ComputeCompoundRTCPPacket<br/>rtcp_sender.cc:589]
+    H --> I[SetFlag packet_types, volatile=true<br/>rtcp_sender.cc:600]
+    I --> J[PrepareReport feedback_state<br/>rtcp_sender.cc:703]
+    J --> J1{method_ == kOff?<br/>rtcp_sender.cc:594}
+    J1 -->|是| J2[拒绝发送]
+    J1 -->|否| J3{compound 模式?<br/>rtcp_sender.cc:711}
+    J3 -->|是| J4[SetFlag SR 或 RR<br/>根据 sending_]
+    J3 -->|reduced-size + report flag| J4
+    J3 -->|否| J5[不自动生成报告]
+    J4 --> N[SetFlag SDES if SR/RR + cname<br/>rtcp_sender.cc:717]
+    N --> O[SetFlag XR 若需要<br/>rtcp_sender.cc:720-725]
+    O --> P[计算下一次发送间隔<br/>ComputeTimeUntilNextReport<br/>rtcp_sender.cc:665<br/>RFC3550 带宽自适应 + [0.5,1.5] 随机化]
+    P --> P2[SetNextRtcpSendEvaluationDuration<br/>→ 回调 schedule_next_rtcp_send_evaluation<br/>→ 回到 B 安排下次]
+    P2 --> Q[遍历 report_flags_<br/>按 type 查 builders_ map<br/>rtcp_sender.cc:625-649]
+    Q --> R[调用对应 BuildXXX 函数<br/>this->*func]
+    R --> S[BuildSR/BuildRR/BuildSDES<br/>BuildPLI/BuildFIR/BuildNACK<br/>BuildREMB/BuildTMMBR/BuildTMMBN<br/>BuildExtendedReports/BuildBYE]
+    S --> T[PacketSender 组装复合包<br/>分片 <= max_packet_size]
+    T --> U[Transport::SendRtcp<br/>发送到网络<br/>rtcp_sender.cc:568]
+```
+
+> ⚠️ **M144 关键变化**：旧版（M105/M125）靠 `Module::Process()` 被 Worker 线程轮询触发 RTCP；M144 已删除该轮询模型，改为 **RTCPSender 通过回调自调度下一次发送**（`schedule_next_rtcp_send_evaluation`），`ModuleRtpRtcpImpl2` 在 worker TaskQueue 上用 `RepeatingTaskHandle` 只做 RTT 周期更新。
+
+```mermaid
+flowchart TD
     A["RTCPSender 构造时<br/>注册 schedule_next_rtcp_send_evaluation 回调<br/>到 ModuleRtpRtcpImpl2"] --> B["ScheduleRtcpSendEvaluation duration<br/>rtp_rtcp_impl2.cc:802"]
     B --> C{"下一次 RTCP 到达?"}
     C -->|是| D["MaybeSendRtcp<br/>rtp_rtcp_impl2.cc:775<br/>在 worker TaskQueue 上执行"]
@@ -432,6 +464,7 @@ flowchart TD
     S --> T["PacketSender 组装复合包<br/>按 max_packet_size 分片"]
     T --> U["Transport::SendRtcp<br/>发送到网络<br/>rtcp_sender.cc:568"]
 ```
+
 
 > 另外，`ModuleRtpRtcpImpl2` 构造时还会启动 `rtt_update_task_ = RepeatingTaskHandle::DelayedStart(worker_queue_, kRttUpdateInterval=1000ms, ...)`（rtp_rtcp_impl2.cc:126），每 1s 调 `PeriodicUpdate()`（:761）做 RTT 周期计算（见 §4.3）。
 
@@ -572,6 +605,100 @@ flowchart LR
 ## 5. 调用图（含函数/文件位置、初始化参数配置）
 
 ### 5.1 模块创建与初始化调用图
+
+```mermaid
+flowchart TD
+    subgraph 创建阶段
+        A["VideoSendStream / VideoReceiveStream2<br/>video/video_send_stream.cc"] --> B["RtpRtcpInterface::Configuration 构造"]
+        B --> C["填入各回调指针<br/>intra_frame_callback,<br/>network_link_rtcp_observer,<br/>rtt_stats, ..."]
+        C --> D["RtpRtcpInterface::Create env, config<br/>rtp_rtcp_interface.h"]
+        D --> E["new ModuleRtpRtcpImpl2 env, config<br/>rtp_rtcp_impl2.cc:79"]
+        E --> F1["RTCPSender rtcp_sender_&#123;env, config&#125;<br/>rtp_rtcp_impl2.cc:83"]
+        E --> F2["RTCPReceiver rtcp_receiver_&#123;env, config, this&#125;<br/>rtp_rtcp_impl2.cc:102"]
+        E --> F3["RtpSenderContext&#123;env, worker_queue, config&#125;<br/>rtp_rtcp_impl2.cc:112"]
+    end
+
+    subgraph RTCPSender 构造
+        F1 --> G1["audio_ = config.audio<br/>ssrc_ = config.local_media_ssrc<br/>env_ = env<br/>rtcp_sender.cc:127"]
+        G1 --> G2["report_interval_ =<br/>config.rtcp_report_interval 或默认<br/>(audio 5s / video 1s)<br/>rtcp_sender.cc:94-98"]
+        G2 --> G3["transport_ = config.outgoing_transport<br/>schedule_next_rtcp_send_evaluation 回调"]
+        G3 --> G4["注册 builders_ map:<br/>kRtcpSr → BuildSR<br/>kRtcpRr → BuildRR<br/>kRtcpSdes → BuildSDES<br/>... 各类型 → BuildXXX<br/>rtcp_sender.cc:156"]
+        G4 --> G5["receive_statistics_ =<br/>config.receive_statistics"]
+    end
+
+    subgraph RTCPReceiver 构造
+        F2 --> H1["receiver_only_ = config.receiver_only<br/>rtcp_receiver.cc:155"]
+        H1 --> H2["registered_ssrcs_ = &#123;media, rtx, flexfec ssrc&#125;"]
+        H2 --> H3["network_link_rtcp_observer_ =<br/>config.network_link_rtcp_observer"]
+        H3 --> H4["rtcp_intra_frame_observer_ =<br/>config.intra_frame_callback"]
+        H4 --> H5["rtcp_loss_notification_observer_ /<br/>network_state_estimate_observer_ /<br/>bitrate_allocation_observer_"]
+        H5 --> H6["cname_callback_ / report_block_data_observer_ /<br/>packet_type_counter_observer_"]
+    end
+
+    subgraph 配置传递
+        I1["MediaConfig.video.rtcp_report_interval_ms<br/>= 1000 ms<br/>media_config.h:75"] --> I2["RtpRtcpInterface::Configuration<br/>.rtcp_report_interval_ms"]
+        I3["MediaConfig.audio.rtcp_report_interval_ms<br/>= 5000 ms<br/>media_config.h:84"] --> I2
+        I2 --> I4["RTCPSender::report_interval_"]
+        I2 --> I5["RTCPReceiver::report_interval_"]
+    end
+
+    subgraph RTCP 模式设置
+        J1["SDP 协商 rtcpmode<br/>reduced-size / compound"] --> J2["VideoChannel 设置"]
+        J2 --> J3["RtpRtcpInterface::SetRTCPStatus mode<br/>rtp_rtcp_interface.h:379"]
+        J3 --> J4["RTCPSender::SetRTCPStatus<br/>rtcp_sender.cc:177"]
+        J4 --> J5["method_ = new_method<br/>next_time_to_send_rtcp_ =<br/>now + interval/2"]
+    end
+
+    %% 添加子图之间的连接
+    E --> I2
+    I4 --> J4
+    I5 --> J4
+```
+
+```mermaid
+flowchart TD
+    subgraph 创建阶段
+        A[VideoSendStream / VideoReceiveStream2<br/>video/video_send_stream.cc] --> B[RtpRtcpInterface::Configuration 构造]
+        B --> C[填入各回调指针<br/>intra_frame_callback,<br/>network_link_rtcp_observer,<br/>rtt_stats, ...]
+        C --> D[RtpRtcpInterface::Create env, config<br/>rtp_rtcp_interface.h]
+        D --> E[new ModuleRtpRtcpImpl2 env, config<br/>rtp_rtcp_impl2.cc:79]
+        E --> F1[RTCPSender rtcp_sender_{env, config}<br/>rtp_rtcp_impl2.cc:83]
+        E --> F2[RTCPReceiver rtcp_receiver_{env, config, this}<br/>rtp_rtcp_impl2.cc:102]
+        E --> F3[RtpSenderContext{env, worker_queue, config}<br/>rtp_rtcp_impl2.cc:112]
+    end
+
+    subgraph RTCPSender 构造
+        F1 --> G1[audio_ = config.audio<br/>ssrc_ = config.local_media_ssrc<br/>env_ = env<br/>rtcp_sender.cc:127]
+        G1 --> G2[report_interval_ =<br/>config.rtcp_report_interval 或默认<br/>(audio 5s / video 1s)<br/>rtcp_sender.cc:94-98]
+        G2 --> G3[transport_ = config.outgoing_transport<br/>schedule_next_rtcp_send_evaluation 回调]
+        G3 --> G4[注册 builders_ map:<br/>kRtcpSr → BuildSR<br/>kRtcpRr → BuildRR<br/>kRtcpSdes → BuildSDES<br/>... 各类型 → BuildXXX<br/>rtcp_sender.cc:156]
+        G4 --> G5[receive_statistics_ =<br/>config.receive_statistics]
+    end
+
+    subgraph RTCPReceiver 构造
+        F2 --> H1[receiver_only_ = config.receiver_only<br/>rtcp_receiver.cc:155]
+        H1 --> H2[registered_ssrcs_ = {media, rtx, flexfec ssrc}]
+        H2 --> H3[network_link_rtcp_observer_ =<br/>config.network_link_rtcp_observer]
+        H3 --> H4[rtcp_intra_frame_observer_ =<br/>config.intra_frame_callback]
+        H4 --> H5[rtcp_loss_notification_observer_ /<br/>network_state_estimate_observer_ /<br/>bitrate_allocation_observer_]
+        H5 --> H6[cname_callback_ / report_block_data_observer_ /<br/>packet_type_counter_observer_]
+    end
+
+    subgraph 配置传递
+        I1[MediaConfig.video.rtcp_report_interval_ms<br/>= 1000 ms<br/>media_config.h:75] --> I2[RtpRtcpInterface::Configuration<br/>.rtcp_report_interval_ms]
+        I3[MediaConfig.audio.rtcp_report_interval_ms<br/>= 5000 ms<br/>media_config.h:84] --> I2
+        I2 --> I4[RTCPSender::report_interval_]
+        I2 --> I5[RTCPReceiver::report_interval_]
+    end
+
+    subgraph RTCP 模式设置
+        J1[SDP 协商 rtcpmode<br/>reduced-size / compound] --> J2[VideoChannel 设置]
+        J2 --> J3[RtpRtcpInterface::SetRTCPStatus mode<br/>rtp_rtcp_interface.h:379]
+        J3 --> J4[RTCPSender::SetRTCPStatus<br/>rtcp_sender.cc:177]
+        J4 --> J5[method_ = new_method<br/>next_time_to_send_rtcp_ =<br/>now + interval/2]
+    end
+```
+
 
 ```mermaid
 flowchart TD

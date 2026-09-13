@@ -23,28 +23,6 @@
   5. ICE pair 检查通过 → writable → DTLS 握手 → 导出 SRTP 密钥
   6. 【交接点】UpdateSessionState 里 EnableSending() → 媒体通道 Enable
        —— 从这一步起进入 wr-api-analysis.md 第 12 节的"媒体两条线"
-
-Offerer(主叫)                信令服务器                 Answerer(被叫)
-    │                           │                          │
-    │ CreateOffer               │                          │
-    │ SetLocal(offer) 启动收集  │                          │
-    │                           │                          │
-    │─── offer ────────────────►│─── offer ──────────────►│ SetRemote(offer)
-    │                           │                          │
-    │ onicecandidate            │                          │
-    │─── candidate#1 host ─────►│─── candidate#1 ────────►│ AddIceCandidate
-    │─── candidate#2 srflx ────►│─── candidate#2 ────────►│ (注入，参与检查)
-    │                           │                          │
-    │                           │                          │ CreateAnswer
-    │                           │                          │ SetLocal(answer)
-    │                           │                          │ onicecandidate
-    │                           │◄── answer ──────────────│
-    │ SetRemote(answer)         │◄── candidate#A ──────────│
-    │ AddIceCandidate           │◄── candidate#B ──────────│
-    │                           │                          │
-    │◄════ STUN 打洞（直连 UDP，不经信令）════►            │
-    │   nominated → DTLS 握手 → SRTP 密钥 → 媒体双线       │
-
 ```
 
 **信令和媒体的关系一句话**：信令 = **建管道**（协商参数 + 打通网络 + 交换密钥），媒体 = **管道里流的水**。`SdpOfferAnswerHandler::UpdateSessionState()` 里的 `EnableSending()`（pc/sdp_offer_answer.cc:3136 调用 / :5076 实现）是"管道通水"的开关——answer 落地那一刻媒体通道才 Enable，这就是为什么**媒体永远在 answer 之后才跑**。
